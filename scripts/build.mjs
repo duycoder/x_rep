@@ -8,6 +8,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const FILES = [
   "manifest.json", "background.js", "content.js", "templates.js",
   "options.html", "options.js", "popup.html", "popup.js",
+  "studio.html", "studio.js", "studio-core.js", "imagekit.js",
 ];
 const DIRS = ["icons"];
 

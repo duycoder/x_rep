@@ -1,6 +1,6 @@
 // Service worker: gọi AI (Gemini hoặc Claude) để tạo gợi ý bình luận.
 // Không tự đăng, không tự thích. Chỉ trả về chữ cho người dùng chọn.
-importScripts("templates.js");
+importScripts("templates.js", "studio-core.js"); // studio-core: Content Studio (ngữ cảnh → chủ đề → bài → ảnh)
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -256,7 +256,216 @@ async function saveExample(msg) {
   await chrome.storage.local.set({ history: history.slice(-HISTORY_MAX) });
 }
 
-function buildPrompt({ text, author, hasMedia, settings, extraHint, imageCount = 0 }) {
+// ---------- Viết bài đăng mới (theo chủ đề, thời điểm, con người, địa điểm) ----------
+const POST_HISTORY_MAX = 100;
+const POST_SCHEMA = {
+  type: "object",
+  properties: {
+    context: { type: "string" },
+    suggestions: { type: "array", items: { type: "string" }, minItems: 3 },
+    images: { type: "array", items: { type: "string" } }
+  },
+  required: ["context", "suggestions", "images"]
+};
+
+async function savePost(msg) {
+  const text = String(msg.text || "").trim();
+  if (!text) return;
+  const { postHistory = [] } = await chrome.storage.local.get({ postHistory: [] });
+  postHistory.push({ text: text.slice(0, 1000), topic: String(msg.topic || "").slice(0, 200), ts: Date.now() });
+  await chrome.storage.local.set({ postHistory: postHistory.slice(-POST_HISTORY_MAX) });
+}
+
+// Model nhỏ hay tự thêm hashtag, hoặc tách hashtag thành "bài" riêng: bỏ đi (trừ khi bạn xin hashtag).
+// Trả về { posts, images } giữ đúng cặp bài ↔ mô tả ảnh sau khi lọc.
+function cleanPosts(list, images, extraHint) {
+  const wantTags = /hashtag|#/i.test(extraHint || "");
+  const posts = [];
+  const imgs = [];
+  list.forEach((raw, i) => {
+    let s = String(raw).trim();
+    if (!wantTags) s = s.replace(/(^|\s)#[\p{L}\p{N}_]+/gu, "");
+    s = s.replace(/(^|\s)@[\p{L}\p{N}_]+/gu, "$1").replace(/[ \t]{2,}/g, " ").trim(); // model nhỏ hay bịa @tài khoản
+    if (s.replace(/[\s\p{P}\p{Extended_Pictographic}]/gu, "").length < 15) return;
+    posts.push(s);
+    imgs.push(String((images || [])[i] || "").trim());
+  });
+  return { posts, images: imgs };
+}
+
+// ---------- Ảnh minh hoạ cho bài đăng ----------
+// "ai": vẽ bằng Pollinations (miễn phí, không key). "search": tìm ảnh giấy phép Creative Commons trên Openverse.
+// "fetch": tải ảnh Openverse cỡ lớn. Trang X không cho tải ảnh từ chỗ khác nên nền tải giúp rồi trả về data URL.
+const OPENVERSE = "https://api.openverse.org/v1/images/";
+async function toDataUrl(res) {
+  const mime = (res.headers.get("content-type") || "image/jpeg").split(";")[0];
+  if (!mime.startsWith("image/")) throw new Error("Không phải ảnh");
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return `data:${mime};base64,${btoa(bin)}`;
+}
+async function getImage(url, ms = 90000) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(ms) });
+  if (!res.ok) {
+    const e = new Error(res.status === 429 || res.status === 402 ? "Dịch vụ ảnh đang giới hạn lượt, thử lại sau ít phút" : `Lỗi tải ảnh (HTTP ${res.status})`);
+    e.status = res.status;
+    e.retryAfter = Number(res.headers.get("retry-after")) || 0;
+    throw e;
+  }
+  return toDataUrl(res);
+}
+async function handleImage(msg) {
+  if (msg.kind === "ai") {
+    const prompt = String(msg.prompt || "").slice(0, 600) + (msg.styled ? "" : ", high quality photo, natural light, no text, no watermark");
+    const W = Math.min(1600, Number(msg.width) || 1024);
+    const H = Math.min(1600, Number(msg.height) || 1024);
+    // Bản miễn phí chỉ cho ~1 ảnh mỗi 30 giây: quá nhanh thì trả 402/429 kèm Retry-After, chờ đúng chừng đó rồi gọi lại.
+    // Quá tải (5xx) thì thử lại vài lần, mỗi lần một seed khác.
+    let last;
+    for (let i = 0; i < 4; i++) {
+      const seed = Math.floor(Math.random() * 1e6);
+      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${W}&height=${H}&nologo=true&seed=${seed}`;
+      try {
+        return { dataUrl: await getImage(url), credit: "" };
+      } catch (e) {
+        last = e;
+        if ((e.status === 402 || e.status === 429) && e.retryAfter > 0 && e.retryAfter <= 90) {
+          await new Promise((r) => setTimeout(r, (e.retryAfter + 1) * 1000));
+          continue;
+        }
+        if (!(e.status >= 500)) break;
+        await new Promise((r) => setTimeout(r, 2500 * (i + 1)));
+      }
+    }
+    throw new Error(last.status >= 500 ? "Máy vẽ miễn phí đang quá tải, thử lại sau ít phút hoặc dùng Ảnh chữ / Tìm ảnh" : last.message);
+  }
+  if (msg.kind === "search") {
+    const q = encodeURIComponent(String(msg.q || "").slice(0, 120));
+    // Ưu tiên ảnh không cần ghi nguồn (CC0, public domain); ít quá thì lấy thêm ảnh CC BY (phải ghi tác giả).
+    const find = async (lic) => {
+      const r = await fetch(`${OPENVERSE}?q=${q}&page_size=12&license=${lic}&mature=false`, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`Openverse lỗi HTTP ${r.status}`);
+      return (await r.json()).results || [];
+    };
+    // Trộn: ảnh không cần ghi nguồn xếp trước, rồi ảnh CC BY (thường là ảnh Flickr hiện đại, hợp chủ đề hơn).
+    const [free, by] = await Promise.all([find("cc0,pdm"), find("by,by-sa").catch(() => [])]);
+    const results = [...free.slice(0, 5), ...by.slice(0, 4), ...free.slice(5), ...by.slice(4)];
+    const items = results.slice(0, 9).map((x) => ({
+      id: x.id,
+      thumb: `${OPENVERSE}${x.id}/thumb/`,
+      credit: /^(cc0|pdm)$/.test(x.license) ? "" : `📷 ${x.creator || "không rõ tác giả"} (CC ${String(x.license).toUpperCase()})`
+    }));
+    // Tải sẵn ảnh nhỏ để hiện trên bảng.
+    await Promise.all(items.map(async (it) => (it.thumbData = await getImage(it.thumb, 20000).catch(() => ""))));
+    return { items: items.filter((it) => it.thumbData) };
+  }
+  if (msg.kind === "fetch") {
+    if (!/^[0-9a-f-]{36}$/.test(String(msg.id))) throw new Error("Ảnh không hợp lệ");
+    return { dataUrl: await getImage(`${OPENVERSE}${msg.id}/thumb/?full_size=true&compressed=false`, 30000) };
+  }
+  throw new Error("Loại ảnh không rõ");
+}
+
+// Kiểu bài chỉ có chữ mà vẫn kéo tương tác. Tên phải khớp danh sách có sẵn trong Cài đặt (options.js POST_PRESETS.postStyles).
+// Kiểu tự thêm không có trong đây thì gửi nguyên tên cho AI.
+const POST_STYLES = {
+  "Life quote": "1–2 câu ngắn, súc tích, đọc xong muốn lưu lại hoặc chụp màn hình. Có hình ảnh cụ thể hoặc một nghịch lý, không sáo rỗng kiểu \"hãy luôn mỉm cười\". Không gắn tên tác giả, không bịa câu nói của người nổi tiếng.",
+  "Triết lý": "Một suy ngẫm về đời, công việc, tiền, các mối quan hệ, rút ra từ trải nghiệm của chính con người tôi. Có một ý bất ngờ ở cuối, đọc xong người ta gật gù \"đúng thật\".",
+  "Lời khuyên": "Một lời khuyên cụ thể, làm được ngay, nói như người từng trải (vd \"điều tui ước biết sớm hơn\"). Không bịa thành tích lớn, không giọng dạy đời.",
+  "Câu hỏi tương tác": "Một câu hỏi trả lời được trong vài chữ hoặc chọn A/B, khơi người đọc kể chuyện của họ. Không hỏi chung chung \"mọi người nghĩ sao\". Có thể mở bằng câu trả lời của chính mình.",
+  "Kể chuyện ngắn": "Một khoảnh khắc nhỏ đời thường, có cái kết bất ngờ hoặc buồn cười ở câu cuối.",
+  "Hài hước": "Đùa về chuyện ai cũng từng gặp, đọc là thấy mình trong đó. Không đùa trên nỗi đau, ngoại hình hay nhóm người nào.",
+  "Quan điểm (hot take)": "Một quan điểm hơi ngược số đông về chuyện đời thường/công việc/tiền, đủ để người ta muốn vào cãi, nhưng không xúc phạm ai, không chính trị, không tôn giáo.",
+  "Danh sách 3 điều": "Mở bằng một dòng tiêu đề (vd \"3 thứ đáng tiền nhất tui mua năm nay:\"), rồi 3 ý, mỗi ý một dòng ngắn. Tổng vẫn dưới 270 ký tự."
+};
+
+// Mô tả thời điểm hiện tại cho AI: thứ, ngày, giờ, buổi.
+function nowContext(d = new Date()) {
+  const h = d.getHours();
+  const buoi = h < 5 ? "khuya/rạng sáng" : h < 11 ? "buổi sáng" : h < 13 ? "buổi trưa" : h < 18 ? "buổi chiều" : h < 22 ? "buổi tối" : "khuya";
+  const thu = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"][d.getDay()];
+  const hm = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  return `${thu}, ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}, ${hm} (${buoi})`;
+}
+
+function buildPostPrompt({ persona, style, topic, place, when, extraHint, settings }) {
+  const styleName = String(style || "").trim();
+  const styleRule = styleName
+    ? `KIỂU BÀI: "${styleName}". ${POST_STYLES[styleName] || "Viết đúng kiểu này."} Cả ${settings.count} bài đều theo kiểu này, khác nhau về ý và góc nhìn, không bài nào mở đầu giống bài khác.`
+    : `Viết đúng ${settings.count} bài, mỗi bài một kiểu khác nhau, chọn trong: life quote; suy ngẫm/triết lý; lời khuyên từ trải nghiệm; câu hỏi tương tác dễ trả lời; kể một khoảnh khắc nhỏ có cái kết; đùa nhẹ. Không bài nào mở đầu giống bài khác.`;
+  const lang =
+    settings.language === "en" ? "Write in English." : "Viết bằng tiếng Việt (trừ khi chủ đề hoặc yêu cầu thêm bảo viết tiếng Anh).";
+  const p = settings.profile;
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  // Thói quen gõ học từ bình luận của bạn. Bỏ quy tắc độ dài vì bài đăng dài hơn bình luận.
+  const habit = p
+    ? [
+        "",
+        `CÁCH GÕ CỦA NGƯỜI DÙNG (rút từ ${p.n} câu họ thật sự viết): bắt chước cách gõ, KHÔNG chép nội dung.`,
+        p.lowerStart > 0.6 ? `- Hay viết thường chữ đầu câu (${pct(p.lowerStart)} số câu).` : "",
+        p.endDot < 0.15 ? "- Hầu như không đặt dấu chấm cuối câu." : "",
+        p.emoji < 0.1 ? "- Gần như không dùng emoji." : `- Dùng emoji ở khoảng ${pct(p.emoji)} số câu.`,
+        p.noAccent > 0.5 ? "- Hay gõ tiếng Việt KHÔNG DẤU." : "",
+        p.fillers.length ? `- Từ đệm hay dùng: ${p.fillers.join(", ")} (dùng khi hợp, đừng nhồi).` : "",
+        "Vài câu thật của họ:",
+        ...(settings.samples || []).slice(0, 10).map((s) => `• ${s}`)
+      ]
+    : [];
+  const past = (settings.pastPosts || []).slice(-5);
+  const system = [
+    "Bạn giúp một người dùng X (Twitter) viết BÀI ĐĂNG MỚI của chính họ (không phải bình luận). Họ sẽ tự đọc, sửa và tự bấm đăng.",
+    "",
+    "MỤC TIÊU: bài chỉ có chữ nhưng khiến người đọc muốn thả tim, trả lời hoặc lưu lại. Dòng đầu phải bắt mắt (người lướt nhanh vẫn dừng lại), nói đúng điều nhiều người thấy mình trong đó. Được hỏi người đọc, nhưng không xin like/follow/share.",
+    "",
+    "DỮ LIỆU ĐẦU VÀO: con người họ (họ là ai), kiểu bài, chủ đề, địa điểm, thời điểm/dịp. Con người và chủ đề luôn phải khớp. Địa điểm và thời điểm: kể chuyện, đùa, hỏi đời thường thì nên dùng; life quote, triết lý, lời khuyên thì chỉ dùng khi tự nhiên, không cần nhắc.",
+    "- Con người: viết đúng vai, góc nhìn, nghề, sở thích, cách xưng hô của họ. Không bịa thêm thông tin cá nhân quan trọng (nghề, gia đình, thu nhập) mà họ không cho.",
+    "- Thời điểm: hợp với giờ và ngày (sáng thì không chúc ngủ ngon, thứ Hai khác cuối tuần). Nếu ngày gần một dịp lễ quen thuộc ở nơi họ sống và hợp chủ đề thì có thể nhắc, không thì thôi.",
+    "- Địa điểm: dùng chi tiết đời thường hợp với nơi đó (món ăn, đường phố, nhịp sống, khí hậu theo mùa). KHÔNG bịa tin tức, sự kiện, số liệu, thời tiết cụ thể của hôm nay.",
+    "- Chủ đề: bám vào đó. Chủ đề trống thì tự chọn chuyện đời thường hợp với con người + thời điểm + địa điểm.",
+    "",
+    styleRule,
+    "",
+    "CÁCH VIẾT:",
+    "- Mỗi bài DƯỚI 270 ký tự (giới hạn của X). Độ dài khác nhau: có bài 1 câu, có bài 2–4 câu.",
+    "- Bài đăng CHỈ CÓ CHỮ, không kèm ảnh/video: KHÔNG viết như đang chỉ vào ảnh (\"cái này\", \"nhìn nè\", \"view này\", \"món này\", \"áo này\"), không giả vờ đang xem video/ảnh của ai. Người đọc chỉ thấy chữ, nên mọi thứ phải nói rõ bằng chữ (\"tô cơm tấm sườn bì chả ở đầu hẻm\" chứ không phải \"món này\").",
+    "- Nghe như người thật tự gõ trên điện thoại, có chi tiết cụ thể (tên món, góc phố, con số nhỏ đời thường). Câu dán được cho bất kỳ ai ở bất kỳ đâu là câu hỏng.",
+    "- Tránh sáo rỗng: \"Chào buổi sáng cả nhà\", \"Chúc mọi người một ngày tốt lành\", \"tràn đầy năng lượng\", \"Cuộc sống là...\", \"Hãy luôn...\".",
+    "- Không tag @tài khoản nào. Không hashtag (trừ khi yêu cầu thêm bảo có), không link, không xin like/follow/share, không quảng cáo.",
+    "- Tối đa 1–2 emoji mỗi bài, nhiều bài không cần emoji.",
+    "- Không viết về chính trị, tôn giáo, chuyện gây thù ghét. Không nói xấu người hay thương hiệu cụ thể.",
+    lang,
+    `Giọng văn: ${settings.tone}.`,
+    ...habit,
+    past.length ? "\nBÀI NGƯỜI DÙNG ĐÃ ĐĂNG TRƯỚC ĐÂY (bắt giọng, KHÔNG lặp lại ý):\n" + past.map((x) => `• ${x.text.replace(/\s+/g, " ")}`).join("\n") : "",
+    "",
+    'Chỉ trả về JSON đúng dạng {"context": "...", "suggestions": ["...", "..."]}, không thêm chữ nào khác.',
+    'Trong đó "context" là MỘT câu ngắn tiếng Việt nói góc viết bạn chọn, ví dụ: "Chiều thứ Ba ở Sài Gòn, dân văn phòng thèm ăn vặt, viết kiểu kể chuyện + hỏi follower".',
+    'Thêm trường "images": mảng cùng độ dài với "suggestions", mỗi phần tử là ẢNH MINH HOẠ cho bài tương ứng, viết bằng TIẾNG ANH theo dạng "từ khoá | mô tả": từ khoá là 2–3 từ tên vật/cảnh chính để tìm ảnh (danh từ, không có a/the), mô tả 8–15 từ là một cảnh cụ thể có không khí, không có chữ trong ảnh, không có người nổi tiếng.',
+    'Ví dụ: "iced coffee | iced milk coffee on a wooden table, rainy Saigon street outside, warm light", "office desk night | messy office desk at night with laptop glow and cold coffee".',
+    "Bài vẫn phải tự đứng được khi không có ảnh (ảnh chỉ là minh hoạ)."
+  ]
+    .filter((x) => x !== "")
+    .join("\n");
+  const user = [
+    // Con người chọn trên bảng; không chọn thì lấy ô "Bạn là ai?" trong Cài đặt.
+    `Con người tôi: ${String(persona || settings.persona || "").trim() || "(không nói, viết như một người bình thường)"}`,
+    `Kiểu bài: ${styleName || "(trộn nhiều kiểu)"}`,
+    `Chủ đề: ${String(topic || "").trim() || "(để bạn chọn)"}`,
+    `Địa điểm: ${String(place || "").trim() || "(không nói, đừng nhắc địa điểm cụ thể)"}`,
+    `Thời điểm hiện tại: ${nowContext()}`,
+    when && String(when).trim() ? `Thời điểm/dịp muốn viết: ${String(when).trim()}` : "",
+    extraHint ? `Yêu cầu thêm: ${extraHint}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { system, user };
+}
+
+function buildPrompt(args) {
+  if (args.mode === "raw") return { system: args.system, user: args.user }; // Content Studio tự viết prompt
+  if (args.mode === "post") return buildPostPrompt(args);
+  const { text, author, hasMedia, settings, extraHint, imageCount = 0 } = args;
   const langRule =
     settings.language === "vi"
       ? "Viết bằng tiếng Việt."
@@ -379,6 +588,7 @@ function parseSuggestions(raw, count) {
       const list = obj.suggestions.map((s) => String(s).trim()).filter(Boolean).slice(0, count);
       if (obj.context) list.context = String(obj.context).slice(0, 200);
       if (Array.isArray(obj.emojis)) list.emojis = obj.emojis.map((e) => String(e || "").trim());
+      if (Array.isArray(obj.images)) list.images = obj.images.map((e) => String(e || "").trim());
       return list;
     }
   } catch (_) {
@@ -435,6 +645,7 @@ async function callClaude(payload, settings) {
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("\n");
+  if (payload.mode === "raw") return { raw: text };
   const list = parseSuggestions(text, settings.count);
   if (!list.length) throw new Error("Không đọc được gợi ý từ phản hồi.");
   return list;
@@ -489,6 +700,7 @@ async function callGemini(payload, settings) {
     .filter((p) => p.text && !p.thought)
     .map((p) => p.text)
     .join("\n");
+  if (payload.mode === "raw") return { raw: text };
   const list = parseSuggestions(text, settings.count);
   if (!list.length) throw new Error("Không đọc được gợi ý từ phản hồi.");
   return list;
@@ -512,7 +724,7 @@ async function callGroq(payload, settings) {
     ],
     temperature: 1,
     // Groq tính giới hạn token/phút gồm cả phần dành sẵn cho câu trả lời, nên để vừa đủ.
-    max_tokens: 1024
+    max_tokens: payload.mode === "raw" ? payload.maxTokens || 2000 : payload.mode === "post" ? 1800 : 1024 // bài đăng + mô tả ảnh dài hơn bình luận
   };
   // Tắt / giảm phần "suy nghĩ" của model có suy nghĩ: đỡ tốn token và nhanh hơn.
   if (/qwen3/i.test(model)) req.reasoning_effort = "none";
@@ -586,6 +798,7 @@ async function callGroq(payload, settings) {
   }
   // Một số model (Qwen, DeepSeek) in phần suy nghĩ trong <think>...</think>, bỏ đi.
   const text = String(data.choices?.[0]?.message?.content || "").replace(/<think>[\s\S]*?<\/think>/g, "");
+  if (payload.mode === "raw") return { raw: text };
   const list = parseSuggestions(text, settings.count);
   if (!list.length) throw new Error("Không đọc được gợi ý từ phản hồi.");
   return list;
@@ -659,9 +872,21 @@ async function callOllama(payload, settings) {
         model: settings.ollamaModel || DEFAULTS.ollamaModel,
         messages: [{ role: "system", content: system }, userMsg],
         stream: false,
-        format: "json",
+        // Bài đăng: đưa khuôn JSON cụ thể, model nhỏ chỉ được bảo "json" hay trả về {} rỗng.
+        format: payload.mode === "raw" ? payload.schema || "json" : payload.mode === "post" ? POST_SCHEMA : "json",
         keep_alive: OLLAMA_KEEP, // giữ model trong RAM cho lần sau nhanh hơn
-        options: OLLAMA_OPTS
+        options:
+          payload.mode === "raw"
+            ? {
+                ...OLLAMA_OPTS,
+                temperature: 0.8,
+                num_predict: payload.maxTokens || 1500,
+                // Studio gửi prompt dài: cửa sổ ngữ cảnh phải chứa đủ cả đầu vào lẫn đầu ra, không thì JSON bị cắt cụt.
+                num_ctx: Math.min(16384, Math.max(4096, Math.ceil(((payload.system || "").length + (payload.user || "").length) / 2.5) + (payload.maxTokens || 1500) + 512))
+              }
+            : payload.mode === "post"
+            ? { ...OLLAMA_OPTS, num_predict: 1000 } // bài đăng dài hơn bình luận
+            : OLLAMA_OPTS
       })
     });
   } catch (e) {
@@ -675,6 +900,7 @@ async function callOllama(payload, settings) {
     throw new Error(data.error || `HTTP ${res.status}`);
   }
   const text = String(data.message?.content || "").replace(/<think>[\s\S]*?<\/think>/g, "");
+  if (payload.mode === "raw") return { raw: text };
   const list = parseSuggestions(text, settings.count);
   if (!list.length) throw new Error("Không đọc được gợi ý từ phản hồi.");
   return list;
@@ -787,7 +1013,7 @@ const PROVIDER_INFO = {
   gemini: { name: "Gemini", key: (s) => s.geminiKey, model: (s) => s.geminiModel, call: (p, s) => callGemini(p, s) },
   groq: { name: "Groq", key: (s) => s.groqKey, model: (s) => s.groqModel, call: (p, s) => callGroq(p, s) },
   claude: { name: "Claude", key: (s) => s.apiKey, model: (s) => s.model, call: (p, s) => callClaude(p, s) },
-  ollama: { name: "Ollama", key: () => "local", model: (s) => s.ollamaModel, call: (p, s) => (isTuned(s) ? callOllamaTuned(p, s) : callOllama(p, s)) }
+  ollama: { name: "Ollama", key: () => "local", model: (s) => s.ollamaModel, call: (p, s) => (isTuned(s) && p.mode !== "post" && p.mode !== "raw" ? callOllamaTuned(p, s) : callOllama(p, s)) }
 };
 
 function seesImages(id, settings) {
@@ -801,7 +1027,7 @@ async function runProvider(id, msg, settings) {
   const p = PROVIDER_INFO[id];
   const imgs = seesImages(id, settings) ? await loadImages(msg.images) : [];
   const suggestions = await p.call({ ...msg, imgs }, settings);
-  return { provider: p.name, model: p.model(settings) || "", imageCount: imgs.length, suggestions, context: suggestions.context || "", emojis: suggestions.emojis || [] };
+  return { provider: p.name, model: p.model(settings) || "", imageCount: imgs.length, suggestions, context: suggestions.context || "", emojis: suggestions.emojis || [], images: suggestions.images || [] };
 }
 
 // Chế độ Kết hợp: bài "quen" (đã có đủ câu bạn từng đăng cho bài giống vậy) thì để model trên máy viết theo các ví dụ đó.
@@ -838,19 +1064,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const settings = await getSettings();
       settings.signal = ctrl.signal;
+      const isPost = msg.mode === "post";
       const { history = [] } = settings.learn ? await chrome.storage.local.get({ history: [] }) : {};
-      if (settings.learn) settings.examples = pickExamples(history, msg.text, 4);
+      if (settings.learn && !isPost) settings.examples = pickExamples(history, msg.text, 4);
+      if (isPost) settings.pastPosts = (await chrome.storage.local.get({ postHistory: [] })).postHistory;
       settings.samples = styleSamples(settings, settings.learn ? history : []);
       settings.profile = styleProfile(settings.samples);
       const count = Math.min(5, Math.max(3, Number(settings.count) || 4));
       settings.count = count;
+      // Câu mẫu có sẵn chỉ hợp với bình luận; bài đăng thì không có câu mẫu.
       const fallback = () =>
-        self.XCSTemplates.templateSuggestions({
-          text: msg.text,
-          hasMedia: msg.hasMedia,
-          count,
-          language: settings.language
-        });
+        isPost
+          ? []
+          : self.XCSTemplates.templateSuggestions({
+              text: msg.text,
+              hasMedia: msg.hasMedia,
+              count,
+              language: settings.language
+            });
+      const noteTail = isPost ? "" : " Đang dùng câu mẫu.";
 
       // Thứ tự thử các nhà cung cấp.
       let order;
@@ -858,7 +1090,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (settings.provider === "hybrid") {
         const cloud = settings.hybridCloud || "groq";
         const hasCloudKey = !!PROVIDER_INFO[cloud].key(settings);
-        const similar = settings.learn ? countSimilar(history || [], msg.text) : 0;
+        const similar = settings.learn && !isPost ? countSimilar(history || [], msg.text) : 0;
         if (!hasCloudKey) {
           order = ["ollama"];
           route = `chưa có ${PROVIDER_INFO[cloud].name} key nên dùng máy`;
@@ -875,7 +1107,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({
             source: "template",
             suggestions: fallback(),
-            note: `Chưa có ${PROVIDER_INFO[id].name} API key, đang dùng câu mẫu.`
+            note: `Chưa có ${PROVIDER_INFO[id].name} API key.${noteTail}`
           });
           return;
         }
@@ -899,9 +1131,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         progress(order[i] === "ollama" ? `${prev}${nm} trên máy (khoảng 20 giây)` : `${prev}${nm}`);
         try {
           const r = await runProvider(order[i], msg, settings);
-          let out = r.suggestions.map((x) => applyStyle(x, settings.profile));
+          let out;
+          if (isPost) {
+            const c = cleanPosts(r.suggestions, r.images, msg.extraHint);
+            out = c.posts;
+            r.images = c.images;
+            if (!out.length) throw new Error("Model trả về bài rỗng");
+          } else out = r.suggestions.map((x) => applyStyle(x, settings.profile));
           if (settings.capitalize) out = out.map(capFirst);
-          out = out.map((x, i) => addEmojiTail(x, i, r.emojis, settings));
+          if (!isPost) out = out.map((x, i) => addEmojiTail(x, i, r.emojis, settings));
           const why = i > 0 ? [route, `${errors.join("; ")} → chuyển sang ${PROVIDER_INFO[order[i]].name}`].filter(Boolean).join("; ") : route;
           sendResponse({ source: "ai", ...r, suggestions: out, route: why });
           return;
@@ -912,7 +1150,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({
         source: "template",
         suggestions: fallback(),
-        note: `Lỗi gọi AI (${errors.join(" | ")}). Đang dùng câu mẫu.`
+        note: `Lỗi gọi AI (${errors.join(" | ")}).${noteTail}`
       });
     })().finally(() => {
       if (tabId != null && running.get(tabId) === ctrl) running.delete(tabId);
@@ -925,6 +1163,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg && msg.type === "xcs-save-example") {
     saveExample(msg);
+    return;
+  }
+  if (msg && msg.type === "xcs-image") {
+    handleImage(msg)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ error: e.message || String(e) }));
+    return true;
+  }
+  if (msg && msg.type === "xcs-save-post") {
+    savePost(msg);
     return;
   }
   if (msg && msg.type === "xcs-train-data") {

@@ -19,6 +19,32 @@ chrome.storage.local.get(
 );
 document.getElementById("opt").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
+// Content Studio: trang riêng của extension (khám phá → cơ hội → ý tưởng → bản nháp + phê bình → ảnh → duyệt).
+document.getElementById("studio").addEventListener("click", async () => {
+  const url = chrome.runtime.getURL("studio.html");
+  const [tab] = await chrome.tabs.query({ url });
+  if (tab) await chrome.tabs.update(tab.id, { active: true });
+  else await chrome.tabs.create({ url });
+  window.close();
+});
+chrome.storage.local.get({ studioPosts: [] }, ({ studioPosts }) => {
+  const n = studioPosts.filter((p) => p.status === "PendingReview").length;
+  if (n) document.getElementById("pend").textContent = `· ${n} bài chờ duyệt`;
+});
+
+// Mở bảng gợi ý bài đăng trên tab X đang mở; tab hiện tại không phải X thì mở X.
+document.getElementById("post").addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    if (!tab) throw new Error();
+    await chrome.tabs.sendMessage(tab.id, { type: "xcs-open-post" });
+    window.close();
+  } catch (_) {
+    const btn = document.getElementById("post");
+    btn.textContent = "Mở x.com rồi bấm lại (hoặc Alt+P trên X)";
+  }
+});
+
 // Bên nào đang nghỉ vì hết lượt thì báo luôn.
 chrome.storage.local.get({ cooldowns: {} }, ({ cooldowns }) => {
   const now = Date.now();

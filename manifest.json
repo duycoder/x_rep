@@ -3,15 +3,16 @@
   "name": "X Gợi Ý Bình Luận",
   "version": "1.0.0",
   "description": "Thêm nút \"Gợi ý bình luận\" vào mỗi bài trên X. Bạn chọn câu, extension điền vào ô trả lời, bạn tự bấm Thích và Trả lời.",
-  "permissions": ["storage"],
-  "host_permissions": ["https://generativelanguage.googleapis.com/*", "https://api.groq.com/*", "https://pbs.twimg.com/*", "https://api.anthropic.com/*", "http://localhost:11434/*", "http://127.0.0.1:11434/*"],
+  "permissions": ["storage", "alarms", "unlimitedStorage"],
+  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://generativelanguage.googleapis.com/*", "https://api.groq.com/*", "https://pbs.twimg.com/*", "https://api.anthropic.com/*", "http://localhost:11434/*", "http://127.0.0.1:11434/*", "https://image.pollinations.ai/*", "https://api.openverse.org/*", "https://api.open-meteo.com/*", "https://geocoding-api.open-meteo.com/*", "https://vnexpress.net/*", "https://tuoitre.vn/*", "https://thanhnien.vn/*", "https://genk.vn/*", "https://dantri.com.vn/*", "https://hn.algolia.com/*", "https://api.github.com/*", "https://www.reddit.com/*"],
+  "optional_host_permissions": ["https://*/*"],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["templates.js", "content.js"],
+      "js": ["templates.js", "imagekit.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

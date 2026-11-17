@@ -95,8 +95,8 @@
     <style>
       :host { all: initial; }
       .panel {
-        position: fixed; right: 20px; bottom: 20px; z-index: 2147483647;
-        width: 380px; max-width: calc(100vw - 32px); max-height: 75vh; overflow: auto;
+        position: fixed; right: 20px; top: 50%; transform: translateY(-50%); z-index: 2147483647;
+        width: 380px; max-width: calc(100vw - 32px); max-height: 85vh; overflow: auto;
         background: #fff; color: #0f1419; border: 1px solid #cfd9de; border-radius: 16px;
         box-shadow: 0 8px 28px rgba(0,0,0,.18); font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
         display: none;
@@ -132,11 +132,59 @@
       .loading { padding: 12px 0; opacity: .75; }
       .foot { font-size: 11px; opacity: .65; margin-top: 8px; }
       .foot a { color: #1d9bf0; cursor: pointer; }
+      .postform { display: none; margin-bottom: 4px; }
+      .panel.post .postform { display: block; }
+      .panel.post .preview { display: none; }
+      .postform label { display: block; font-size: 12px; font-weight: 600; margin: 6px 0 3px; }
+      .postform .opt-none { font-weight: 400; opacity: .6; font-size: 11px; margin-left: 4px; }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip { border: 1px solid rgba(29,155,240,.5); background: transparent; color: inherit; border-radius: 999px;
+        padding: 4px 10px; font: 13px/1.25 inherit; cursor: pointer; max-width: 100%; text-align: left;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip:hover { background: rgba(29,155,240,.08); }
+      .chip.on { background: #1d9bf0; border-color: #1d9bf0; color: #fff; }
+      .chips .empty { font-size: 12px; opacity: .6; }
+      .chips .empty a { color: #1d9bf0; cursor: pointer; }
+      .chip.add { border-style: dashed; opacity: .75; padding: 4px 9px; }
+      .chip.add:hover { opacity: 1; }
+      .chips input.addin { flex: 1 1 140px; min-width: 120px; border: 1px solid #1d9bf0; border-radius: 999px; padding: 4px 10px;
+        font: 13px/1.25 inherit; background: transparent; color: inherit; outline: none; }
+      .postform .now { font-size: 11px; opacity: .65; margin-top: 2px; }
+      .imgbar { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; align-items: center; }
+      .imgbar .lbl { font-size: 11px; opacity: .6; margin-right: 2px; }
+      button.mini { border: 1px solid rgba(127,127,127,.45); background: transparent; color: inherit; border-radius: 999px;
+        padding: 3px 9px; font: 12px/1.2 inherit; cursor: pointer; }
+      button.mini:hover { border-color: #1d9bf0; color: #1d9bf0; }
+      .imgbox:empty { display: none; }
+      .imgbox { margin-top: 6px; }
+      .pick { position: relative; }
+      .pick img { width: 100%; max-height: 240px; object-fit: cover; border-radius: 10px; display: block; }
+      .pick .rm { position: absolute; top: 6px; right: 6px; border: 0; border-radius: 999px; width: 26px; height: 26px;
+        background: rgba(0,0,0,.65); color: #fff; cursor: pointer; font-size: 14px; }
+      .pick .redo { position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,.65); color: #fff; border: 0; }
+      .credit { font-size: 11px; opacity: .65; margin-top: 2px; }
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+      .grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; cursor: pointer; display: block; }
+      .grid img:hover { outline: 2px solid #1d9bf0; }
+      .qrow { display: flex; gap: 4px; margin-bottom: 5px; }
+      .qrow input { flex: 1; border: 1px solid #cfd9de; border-radius: 999px; padding: 4px 10px; font: 12px inherit;
+        background: transparent; color: inherit; }
+      .wait { font-size: 12px; opacity: .7; padding: 6px 0; }
+      .len { font-size: 11px; opacity: .6; margin-left: auto; align-self: center; }
+      .len.over { color: #f4212e; opacity: 1; }
     </style>
     <div class="panel" role="dialog" aria-label="Gợi ý bình luận">
-      <header><b>Gợi ý bình luận</b><button class="x" title="Đóng (Esc)">✕</button></header>
+      <header><b class="title">Gợi ý bình luận</b><button class="x" title="Đóng (Esc)">✕</button></header>
       <div class="body">
         <div class="preview"></div>
+        <div class="postform">
+          <label>Con người tôi</label><div class="chips" data-k="persona"></div>
+          <label>Kiểu bài <span class="opt-none">không chọn = trộn nhiều kiểu</span></label><div class="chips" data-k="style"></div>
+          <label>Chủ đề <span class="opt-none">không chọn = AI tự chọn</span></label><div class="chips" data-k="topic"></div>
+          <label>Địa điểm <span class="opt-none">không chọn = không nhắc nơi nào</span></label><div class="chips" data-k="place"></div>
+          <label>Thời điểm / dịp <span class="opt-none">không chọn = bây giờ</span></label><div class="chips" data-k="when"></div>
+          <div class="now"></div>
+        </div>
         <div class="hint">
           <input placeholder="Thêm ý (vd: hỏi về giá, giọng hài hơn)..." />
           <button class="act ghost regen">Tạo lại</button>
@@ -150,11 +198,22 @@
   const preview = shadow.querySelector(".preview");
   const contentBox = shadow.querySelector(".content");
   const hintInput = shadow.querySelector(".hint input");
+  const regenBtn = shadow.querySelector(".regen");
+  const titleEl = shadow.querySelector(".title");
+  const footEl = shadow.querySelector(".foot");
+  // Lựa chọn đang bật của bảng bài đăng: { persona, topic, place, when } (chuỗi rỗng = không chọn).
+  let postSel = { persona: "", style: "", topic: "", place: "", when: "" };
+  const STYLE_DEFAULT = "Life quote\nTriết lý\nLời khuyên\nCâu hỏi tương tác\nKể chuyện ngắn\nHài hước\nQuan điểm (hot take)\nDanh sách 3 điều";
+  const nowEl = shadow.querySelector(".postform .now");
+  // Chế độ "post": viết bài đăng mới. POST_KEY thay cho currentArticle để các hàm dùng chung biết bảng đang mở.
+  const POST_KEY = { post: true };
+  const isPostMode = () => currentArticle === POST_KEY;
+  const regen = () => currentArticle && (isPostMode() ? loadPosts() : loadSuggestions(currentArticle));
   shadow.querySelector(".x").addEventListener("click", closePanel);
-  shadow.querySelector(".regen").addEventListener("click", () => currentArticle && loadSuggestions(currentArticle));
+  regenBtn.addEventListener("click", regen);
   hintInput.addEventListener("keydown", (e) => {
     e.stopPropagation();
-    if (e.key === "Enter" && currentArticle) loadSuggestions(currentArticle);
+    if (e.key === "Enter") regen();
   });
   shadow.querySelector(".opt").addEventListener("click", () => chrome.runtime.sendMessage({ type: "xcs-open-options" }));
 
@@ -163,13 +222,235 @@
     currentArticle = null;
   }
 
+  function setMode(post) {
+    panel.classList.toggle("post", post);
+    titleEl.textContent = post ? "Gợi ý bài đăng" : "Gợi ý bình luận";
+    panel.setAttribute("aria-label", titleEl.textContent);
+    regenBtn.textContent = post ? "Tạo bài" : "Tạo lại";
+    hintInput.placeholder = post ? "Thêm ý (vd: hài hơn, có 1 câu hỏi, viết tiếng Anh)..." : "Thêm ý (vd: hỏi về giá, giọng hài hơn)...";
+    footEl.firstChild.textContent = post ? "Bạn tự đọc lại và tự bấm Đăng trên X. · " : "Bạn tự đọc lại, tự bấm Trả lời và Thích trên X. · ";
+  }
+
   function openPanel(article) {
+    setMode(false);
     currentArticle = article;
     const info = getTweetInfo(article);
     preview.textContent = (info.author ? info.author + "\n" : "") + (info.text || "(bài không có chữ)");
     hintInput.value = "";
     panel.classList.add("open");
     loadSuggestions(article);
+  }
+
+  // ---------- Gợi ý bài đăng mới ----------
+  let postComposerHint = null; // thanh công cụ của ô đăng bài mà bạn bấm nút, để điền đúng ô đó
+  function nowLabel() {
+    const d = new Date();
+    return `Bây giờ: ${d.toLocaleDateString("vi-VN", { weekday: "long", day: "numeric", month: "numeric" })}, ${d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  function openPostPanel(toolbar) {
+    if (!chrome.runtime?.id) return toast("Extension vừa được cập nhật. Bấm F5 tải lại trang X.");
+    postComposerHint = toolbar || null;
+    setMode(true);
+    currentArticle = POST_KEY;
+    hintInput.value = "";
+    contentBox.innerHTML = '<div class="hint" style="display:block;opacity:.7">Bấm chọn rồi bấm <b>Tạo bài</b>.</div>';
+    nowEl.textContent = nowLabel() + " (luôn gửi kèm cho AI)";
+    chrome.storage.local.get(
+      { persona: "", postPersonas: "", postStyles: STYLE_DEFAULT, postTopics: "", postPlaces: "", postTimes: "", postSel: null },
+      (s) => {
+        const lines = (v) => [...new Set(String(v || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))];
+        const lists = {
+          persona: lines(s.postPersonas).length ? lines(s.postPersonas) : lines(s.persona.replace(/\r?\n/g, " ")),
+          style: lines(s.postStyles),
+          topic: lines(s.postTopics),
+          place: lines(s.postPlaces),
+          when: lines(s.postTimes)
+        };
+        // Giữ lựa chọn lần trước nếu vẫn còn trong danh sách. Có đúng 1 "con người" thì chọn sẵn.
+        const prev = s.postSel || {};
+        postSel = {};
+        for (const k of Object.keys(lists)) postSel[k] = lists[k].includes(prev[k]) ? prev[k] : "";
+        if (!postSel.persona && lists.persona.length === 1) postSel.persona = lists.persona[0];
+        for (const k of Object.keys(lists)) renderChips(k, lists[k]);
+        panel.classList.add("open");
+      }
+    );
+  }
+
+  // Nhóm lựa chọn → khoá trong kho (dùng chung với trang Cài đặt: postX = mục đã tick, postPool.postX = mọi mục).
+  const POST_LIST_KEY = { persona: "postPersonas", style: "postStyles", topic: "postTopics", place: "postPlaces", when: "postTimes" };
+  const ADD_PH = { persona: "vd: dev 30 tuổi, xưng mình", style: "vd: Tâm sự đêm khuya", topic: "vd: chạy bộ", place: "vd: Đà Lạt", when: "vd: sáng thứ Hai mưa" };
+  function renderChips(k, items) {
+    const box = shadow.querySelector(`.chips[data-k="${k}"]`);
+    box.innerHTML = "";
+    box._items = items;
+    items.forEach((v) => {
+      const c = document.createElement("button");
+      c.type = "button";
+      c.className = "chip" + (postSel[k] === v ? " on" : "");
+      c.textContent = v;
+      c.title = `${v}\n(chuột phải để bỏ khỏi bảng)`;
+      c.addEventListener("click", () => {
+        postSel[k] = postSel[k] === v ? "" : v; // bấm lại để bỏ chọn
+        box.querySelectorAll(".chip:not(.add)").forEach((x) => x.classList.toggle("on", x.textContent === postSel[k]));
+        chrome.storage.local.set({ postSel });
+      });
+      c.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (confirm(`Bỏ "${v}" khỏi bảng? (Vẫn còn trong Cài đặt, tick lại lúc nào cũng được)`)) saveChipList(k, items.filter((x) => x !== v), v, false);
+      });
+      box.appendChild(c);
+    });
+    // Nút ＋: gõ lựa chọn mới ngay tại đây, Enter để lưu và chọn luôn.
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "chip add";
+    add.textContent = items.length ? "＋" : "＋ Thêm lựa chọn";
+    add.title = "Thêm lựa chọn mới (tự lưu vào Cài đặt)";
+    add.addEventListener("click", () => {
+      const inp = document.createElement("input");
+      inp.className = "addin";
+      inp.placeholder = ADD_PH[k] || "Gõ rồi Enter";
+      add.replaceWith(inp);
+      inp.focus();
+      let done = false;
+      const finish = (save) => {
+        if (done) return;
+        done = true;
+        const v = inp.value.replace(/\s+/g, " ").trim();
+        if (save && v) {
+          postSel[k] = v;
+          saveChipList(k, items.includes(v) ? items : [...items, v], v, true);
+        } else renderChips(k, items);
+      };
+      inp.addEventListener("keydown", (e) => {
+        e.stopPropagation(); // không để phím tắt của X ăn mất phím
+        if (e.key === "Enter") finish(true);
+        if (e.key === "Escape") finish(false);
+      });
+      inp.addEventListener("blur", () => finish(true));
+    });
+    box.appendChild(add);
+  }
+  // Lưu danh sách đã tick của nhóm k; mục mới thì thêm vào kho chung để trang Cài đặt cũng thấy.
+  function saveChipList(k, list, v, added) {
+    const key = POST_LIST_KEY[k];
+    if (!added && postSel[k] === v) postSel[k] = "";
+    renderChips(k, list);
+    chrome.storage.local.get({ postPool: {} }, ({ postPool }) => {
+      if (added && postPool[key] && !postPool[key].includes(v)) postPool[key] = [...postPool[key], v];
+      chrome.storage.local.set({ [key]: list.join("\n"), postPool, postSel }, () => {
+        if (chrome.runtime.lastError) toast(`Không lưu được: ${chrome.runtime.lastError.message}`);
+      });
+    });
+  }
+
+  function loadPosts() {
+    chrome.storage.local.set({ postSel });
+    nowEl.textContent = nowLabel() + " (luôn gửi kèm cho AI)";
+    startRequest(
+      POST_KEY,
+      { type: "xcs-suggest", mode: "post", ...postSel, text: postSel.topic, extraHint: hintInput.value.trim() },
+      "Đang viết bài"
+    );
+  }
+
+  // Ô soạn bài mà nút "Gợi ý bài" nằm cạnh có phải ô trả lời không (không gắn nút vào ô trả lời).
+  function isReplyToolbar(toolbar) {
+    const dialog = toolbar.closest('[role="dialog"]');
+    if (dialog) return !!dialog.querySelector('article[data-testid="tweet"]');
+    return /\/status\//.test(location.pathname);
+  }
+  function injectPostButtons() {
+    document.querySelectorAll('[data-testid="toolBar"]').forEach((tb) => {
+      if (tb.querySelector("[data-xcs-post]") || isReplyToolbar(tb)) return;
+      const b = document.createElement("button");
+      b.setAttribute("data-xcs-post", "1");
+      b.type = "button";
+      b.title = "Gợi ý bài đăng theo chủ đề, thời điểm, con người, địa điểm (Alt+P)";
+      b.textContent = "✍️ Gợi ý bài";
+      Object.assign(b.style, {
+        border: "1px solid rgba(29,155,240,.5)", background: "transparent", color: "rgb(29,155,240)", borderRadius: "999px",
+        padding: "2px 10px", fontSize: "13px", fontWeight: "600", cursor: "pointer", alignSelf: "center",
+        margin: "0 6px", whiteSpace: "nowrap", fontFamily: "inherit"
+      });
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openPostPanel(tb);
+      });
+      (tb.firstElementChild || tb).appendChild(b);
+    });
+  }
+  const postObserver = new MutationObserver(() => {
+    clearTimeout(postObserver._t);
+    postObserver._t = setTimeout(injectPostButtons, 300);
+  });
+  postObserver.observe(document.body, { childList: true, subtree: true });
+  injectPostButtons();
+  // Nút "Viết bài" trong cửa sổ nhỏ của extension.
+  chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
+    if (m && m.type === "xcs-open-post") openPostPanel(null);
+    // Content Studio nhờ điền bài (chữ + ảnh) vào ô đăng bài. Bạn tự bấm Đăng.
+    if (m && m.type === "xcs-fill-post") {
+      postComposerHint = null;
+      fillPost(m.text, m.img).then((ok) => {
+        if (ok) pending = { kind: "post", topic: "", suggested: m.text, studioId: m.studioId, at: Date.now() };
+        sendResponse({ ok: !!ok });
+      });
+      return true;
+    }
+  });
+
+  // Tìm ô đăng bài mới (không phải ô trả lời) để điền.
+  async function findPostComposer() {
+    const near = postComposerHint && postComposerHint.isConnected ? postComposerHint : null;
+    if (near) {
+      for (let el = near; el && el !== document.body; el = el.parentElement) {
+        const ta = el.querySelector('[data-testid="tweetTextarea_0"]');
+        if (ta) return ta;
+      }
+    }
+    const dlg = document.querySelector('[role="dialog"]');
+    if (dlg && !dlg.querySelector('article[data-testid="tweet"]')) {
+      const ta = dlg.querySelector('[data-testid="tweetTextarea_0"]');
+      if (ta) return ta;
+    }
+    if (location.pathname === "/home") {
+      const ta = document.querySelector('[data-testid="tweetTextarea_0"]');
+      if (ta) return ta;
+    }
+    const newBtn = document.querySelector('[data-testid="SideNav_NewTweet_Button"]');
+    if (newBtn) {
+      newBtn.click();
+      return waitFor(() => document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]'), 3000);
+    }
+    return null;
+  }
+
+  // Trả về true khi đã điền được chữ vào ô đăng bài.
+  async function fillPost(text, img) {
+    if (!text.trim()) return false;
+    if (img && img.credit) text = `${text.trim()}\n\n${img.credit}`; // ảnh CC BY phải ghi tác giả
+    const composer = await findPostComposer();
+    if (!composer) {
+      await navigator.clipboard.writeText(text).catch(() => {});
+      toast("Không tìm thấy ô đăng bài. Đã sao chép chữ, bạn mở ô đăng bài rồi Ctrl+V.");
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    if (!(await insertText(composer, text))) {
+      await navigator.clipboard.writeText(text).catch(() => {});
+      toast("Chưa điền được tự động. Đã sao chép, bạn bấm vào ô đăng bài rồi Ctrl+V.");
+      return false;
+    }
+    if (img && !(await attachImage(composer, img))) {
+      toast("Đã điền chữ. Chưa gắn được ảnh: ảnh đã được chép, bấm vào ô đăng bài rồi Ctrl+V.");
+      return true;
+    }
+    closePanel();
+    toast(img ? "Đã điền chữ + ảnh. Đọc lại rồi tự bấm Đăng nhé." : "Đã điền. Đọc lại rồi tự bấm Đăng nhé.");
+    return true;
   }
 
   let currentReq = null;
@@ -185,12 +466,18 @@
 
   function loadSuggestions(article) {
     const info = getTweetInfo(article);
-    contentBox.innerHTML = '<div class="ai"><div class="loading">Đang nghĩ câu bình luận...</div></div><div class="past"></div>';
+    startRequest(article, { type: "xcs-suggest", ...info, extraHint: hintInput.value.trim() }, "Đang nghĩ câu bình luận");
     loadPast(article, info);
+  }
+
+  // Gửi yêu cầu gợi ý về nền, hiện dòng chờ, rồi vẽ kết quả. article = bài đang trả lời, hoặc POST_KEY khi viết bài mới.
+  function startRequest(article, payload, label) {
+    contentBox.innerHTML = `<div class="ai"><div class="loading">${label}...</div></div>`;
+    if (article !== POST_KEY) contentBox.appendChild(Object.assign(document.createElement("div"), { className: "past" }));
     // Dòng trạng thái: đang hỏi bên nào + đã chờ bao lâu.
     const reqId = String(Date.now()) + Math.random();
     currentReq = reqId;
-    loadingText = "Đang nghĩ câu bình luận";
+    loadingText = label;
     const t0 = Date.now();
     clearInterval(loadingTimer);
     const tick = () => {
@@ -212,7 +499,7 @@
     if (!chrome.runtime?.id) return stale();
     try {
     chrome.runtime.sendMessage(
-      { type: "xcs-suggest", ...info, reqId, extraHint: hintInput.value.trim() },
+      { ...payload, reqId },
       (res) => {
         if (currentReq === reqId) clearInterval(loadingTimer);
         if (article !== currentArticle || currentReq !== reqId) return;
@@ -261,21 +548,23 @@
   }
 
   // Một ô câu gợi ý + nút Điền / Sao chép.
-  function makeItem(article, text) {
+  function makeItem(article, text, imgDesc) {
     const item = document.createElement("div");
     item.className = "item";
+    const post = article === POST_KEY;
+    item.img = null; // ảnh đã chọn cho bài này: { dataUrl, credit }
     const ta = document.createElement("textarea");
     ta.value = text;
-    ta.rows = 2;
+    ta.rows = post ? 4 : 2;
     ta.addEventListener("keydown", (e) => e.stopPropagation());
     const row = document.createElement("div");
     row.className = "row";
     const use = document.createElement("button");
     use.className = "act primary";
-    use.textContent = "Điền vào trả lời";
+    use.textContent = post ? "Điền vào ô đăng bài" : "Điền vào trả lời";
     use.addEventListener("click", () => {
       rememberPending(article, ta.value);
-      fillReply(article, ta.value);
+      post ? fillPost(ta.value, item.img) : fillReply(article, ta.value);
     });
     const copy = document.createElement("button");
     copy.className = "act ghost";
@@ -287,8 +576,205 @@
       setTimeout(() => (copy.textContent = "Sao chép"), 1200);
     });
     row.append(use, copy);
+    if (post) {
+      // Đếm ký tự gần đúng (X giới hạn 280 với tài khoản thường).
+      const len = document.createElement("span");
+      len.className = "len";
+      const upd = () => {
+        const n = [...ta.value].length;
+        len.textContent = `${n}/280`;
+        len.classList.toggle("over", n > 280);
+      };
+      ta.addEventListener("input", upd);
+      upd();
+      row.append(len);
+      item.append(ta, row, ...imageTools(item, ta, imgDesc));
+      return item;
+    }
     item.append(ta, row);
     return item;
+  }
+
+  // ---------- Ảnh minh hoạ cho bài đăng ----------
+  const ask = (m) =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(m, (r) =>
+          resolve(chrome.runtime.lastError ? { error: "Mất kết nối extension, bấm F5 tải lại trang X" } : r || { error: "Không có phản hồi" })
+        );
+      } catch (_) {
+        resolve({ error: "Extension vừa được cập nhật, bấm F5 tải lại trang X" });
+      }
+    });
+
+  function imageTools(item, ta, imgDesc) {
+    const bar = document.createElement("div");
+    bar.className = "imgbar";
+    bar.innerHTML = '<span class="lbl">Ảnh:</span>';
+    const box = document.createElement("div");
+    box.className = "imgbox";
+    const btn = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.className = "mini";
+      b.type = "button";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", fn);
+      bar.appendChild(b);
+    };
+    // imgDesc dạng "từ khoá | mô tả" (AI viết). Vẽ thì dùng cả câu, tìm thì dùng từ khoá.
+    const [kwPart, descPart] = String(imgDesc || "").includes("|") ? imgDesc.split("|").map((x) => x.trim()) : ["", String(imgDesc || "").trim()];
+    const desc = () => [kwPart, descPart].filter(Boolean).join(", ") || ta.value;
+    const KW_STOP = new Set(("a an the of on in at with and or to for from by into over under near behind beside while is are sitting standing " +
+      "looking holding drinking relaxing walking reading listening wearing focus shot close-up closeup background blurred warm soft natural " +
+      "lighting light style photo image scene view young old man woman person people his her their its cozy beautiful").split(" "));
+    const keywords = () =>
+      kwPart ||
+      descPart.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter((w) => w && !KW_STOP.has(w)).slice(0, 3).join(" ");
+    const wait = (t) => (box.innerHTML = `<div class="wait">${t}</div>`);
+    const fail = (e) => (box.innerHTML = `<div class="note">${e}</div>`);
+
+    // Hiện ảnh đã chọn + nút bỏ ảnh (+ nút làm lại nếu có).
+    const show = (dataUrl, credit, redoLabel, redo) => {
+      item.img = { dataUrl, credit: credit || "" };
+      box.innerHTML = "";
+      const p = document.createElement("div");
+      p.className = "pick";
+      const im = document.createElement("img");
+      im.src = dataUrl;
+      const rm = document.createElement("button");
+      rm.className = "rm";
+      rm.title = "Bỏ ảnh";
+      rm.textContent = "✕";
+      rm.addEventListener("click", () => {
+        item.img = null;
+        box.innerHTML = "";
+      });
+      p.append(im, rm);
+      if (redo) {
+        const r = document.createElement("button");
+        r.className = "mini redo";
+        r.textContent = redoLabel;
+        r.addEventListener("click", redo);
+        p.append(r);
+      }
+      box.appendChild(p);
+      if (credit) {
+        const c = document.createElement("div");
+        c.className = "credit";
+        c.textContent = `Ảnh cần ghi nguồn, sẽ tự thêm vào cuối bài: ${credit}`;
+        box.appendChild(c);
+      }
+    };
+
+    let palette = Math.floor(Math.random() * QUOTE_PALETTES.length);
+    const doQuote = () => {
+      palette = (palette + 1) % QUOTE_PALETTES.length;
+      show(quoteCard(ta.value, palette), "", "🎨 Đổi màu", doQuote);
+    };
+    const doAi = async () => {
+      wait("Đang vẽ ảnh... (10–60 giây, máy vẽ miễn phí phải xếp hàng)");
+      const r = await ask({ type: "xcs-image", kind: "ai", prompt: desc() });
+      if (r.error) return fail(`Không vẽ được: ${r.error}`);
+      show(r.dataUrl, "", "🔄 Vẽ lại", doAi);
+    };
+    const doSearch = async (q) => {
+      q = typeof q === "string" ? q : keywords();
+      box.innerHTML = "";
+      const qr = document.createElement("div");
+      qr.className = "qrow";
+      const inp = document.createElement("input");
+      inp.value = q;
+      inp.placeholder = "Từ khoá tiếng Anh, vd: iced coffee";
+      const go = document.createElement("button");
+      go.className = "mini";
+      go.textContent = "Tìm";
+      const run = () => doSearch(inp.value.trim());
+      go.addEventListener("click", run);
+      inp.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") run();
+      });
+      qr.append(inp, go);
+      const res = document.createElement("div");
+      res.innerHTML = '<div class="wait">Đang tìm ảnh trên Openverse...</div>';
+      box.append(qr, res);
+      if (!q) return (res.innerHTML = '<div class="wait">Gõ từ khoá rồi bấm Tìm.</div>');
+      const r = await ask({ type: "xcs-image", kind: "search", q });
+      if (r.error) return (res.innerHTML = `<div class="note">${r.error}</div>`);
+      if (!r.items.length) return (res.innerHTML = '<div class="wait">Không có ảnh nào, thử từ khoá khác (tiếng Anh, ngắn).</div>');
+      res.innerHTML = '<div class="grid"></div><div class="credit">Bấm vào ảnh để chọn. Ảnh Creative Commons từ Openverse.</div>';
+      r.items.forEach((it) => {
+        const im = document.createElement("img");
+        im.src = it.thumbData;
+        im.title = it.credit || "Không cần ghi nguồn (CC0 / public domain)";
+        im.addEventListener("click", async () => {
+          wait("Đang tải ảnh cỡ lớn...");
+          const f = await ask({ type: "xcs-image", kind: "fetch", id: it.id });
+          // Không tải được bản lớn thì dùng tạm ảnh nhỏ.
+          show(f.dataUrl || it.thumbData, it.credit, "🔎 Chọn ảnh khác", () => doSearch(q));
+        });
+        res.querySelector(".grid").appendChild(im);
+      });
+    };
+    btn("🖋 Ảnh chữ", "Ảnh nền màu + câu chữ lớn, vẽ ngay trên máy", doQuote);
+    btn("🎨 AI vẽ", "AI vẽ ảnh minh hoạ theo bài (Pollinations, miễn phí)", doAi);
+    btn("🔎 Tìm ảnh", "Tìm ảnh Creative Commons trên mạng (Openverse)", doSearch);
+    return [bar, box];
+  }
+
+  // Ảnh chữ (quote card): vẽ trong imagekit.js, dùng chung với trang Studio.
+  const { quoteCard, QUOTE_PALETTES } = self.XCSImage;
+
+  // Đưa ảnh vào ô đăng bài của X: qua nút chọn file, không được thì giả lập dán ảnh.
+  async function attachImage(composer, img) {
+    // Tự giải mã data URL (không dùng fetch, CSP của X không cho fetch "data:").
+    const [head, b64] = img.dataUrl.split(",");
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: (head.match(/^data:([^;]+)/) || [])[1] || "image/png" });
+    const ext = (blob.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    const file = new File([blob], `anh-minh-hoa.${ext}`, { type: blob.type || "image/png" });
+    let scope = composer;
+    let input = null;
+    for (let el = composer; el && el !== document.body && !input; el = el.parentElement) {
+      input = el.querySelector('input[data-testid="fileInput"]');
+      scope = el;
+    }
+    const attached = () => scope.querySelector('[data-testid="attachments"] img, [data-testid="attachments"] [style*="background-image"]');
+    if (input) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      if (await waitFor(attached, 4000)) return true;
+    }
+    try {
+      const target = composer.querySelector('[contenteditable="true"]') || composer;
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      target.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      if (await waitFor(attached, 4000)) return true;
+    } catch (_) {
+      // không giả lập dán được
+    }
+    // Cuối cùng: chép ảnh vào bộ nhớ tạm (clipboard chỉ nhận PNG) để bạn tự Ctrl+V.
+    try {
+      const png = blob.type === "image/png" ? blob : await toPng(blob);
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    } catch (_) {
+      // bỏ qua
+    }
+    return false;
+  }
+  async function toPng(blob) {
+    const bmp = await createImageBitmap(blob);
+    const cv = document.createElement("canvas");
+    cv.width = bmp.width;
+    cv.height = bmp.height;
+    cv.getContext("2d").drawImage(bmp, 0, 0);
+    return new Promise((r) => cv.toBlob(r, "image/png"));
   }
 
   function renderSuggestions(res, article) {
@@ -296,13 +782,14 @@
     box.innerHTML = "";
     const src = document.createElement("div");
     src.className = "src";
-    src.textContent = res.source === "ai" ? `Gợi ý bởi ${res.provider || "AI"}${res.model ? " · " + res.model : ""}${res.imageCount ? ` · đã xem ${res.imageCount} ảnh` : ""}${res.route ? ` · ${res.route}` : ""}` : "Câu mẫu có sẵn";
+    const post = article === POST_KEY;
+    src.textContent = res.source === "ai" ? `Gợi ý bởi ${res.provider || "AI"}${res.model ? " · " + res.model : ""}${res.imageCount ? ` · đã xem ${res.imageCount} ảnh` : ""}${res.route ? ` · ${res.route}` : ""}` : post ? "" : "Câu mẫu có sẵn";
     box.appendChild(src);
     if (res.context) {
       const c = document.createElement("div");
       c.className = "ctx";
-      c.textContent = `AI hiểu bài: ${res.context}`;
-      c.title = "Nếu AI hiểu sai, gõ thêm ý vào ô phía trên rồi bấm Tạo lại";
+      c.textContent = post ? `Góc viết: ${res.context}` : `AI hiểu bài: ${res.context}`;
+      c.title = post ? "Muốn góc khác thì gõ thêm ý rồi bấm Tạo bài" : "Nếu AI hiểu sai, gõ thêm ý vào ô phía trên rồi bấm Tạo lại";
       box.appendChild(c);
     }
     if (res.note) {
@@ -311,7 +798,7 @@
       n.textContent = res.note;
       box.appendChild(n);
     }
-    res.suggestions.forEach((s) => box.appendChild(makeItem(article, s)));
+    res.suggestions.forEach((s, i) => box.appendChild(makeItem(article, s, (res.images || [])[i])));
   }
 
   // ---------- Điền chữ vào ô trả lời (không bấm gửi) ----------
@@ -390,6 +877,10 @@
   // đọc chữ cuối cùng trong ô trả lời (đã sửa hay chưa) rồi lưu lại làm ví dụ cho lần sau.
   let pending = null;
   function rememberPending(article, suggested) {
+    if (article === POST_KEY) {
+      pending = { kind: "post", topic: postSel.topic, suggested, at: Date.now() };
+      return;
+    }
     const info = getTweetInfo(article);
     pending = { post: (info.text || "").slice(0, 600), author: info.author, suggested, at: Date.now() };
   }
@@ -397,9 +888,17 @@
     if (!pending || Date.now() - pending.at > 30 * 60 * 1000) return;
     const composer = findComposer();
     const target = composer && (composer.querySelector('[contenteditable="true"]') || composer);
-    const reply = target ? target.innerText.replace(/\s+/g, " ").trim() : "";
-    if (!reply) return;
-    chrome.runtime.sendMessage({ type: "xcs-save-example", ...pending, reply });
+    const raw = target ? target.innerText.trim() : "";
+    if (!raw) return;
+    try {
+      if (pending.kind === "post") {
+        chrome.runtime.sendMessage({ type: "xcs-save-post", topic: pending.topic, text: raw });
+        if (pending.studioId) chrome.runtime.sendMessage({ type: "studio-published", postId: pending.studioId });
+      }
+      else chrome.runtime.sendMessage({ type: "xcs-save-example", ...pending, reply: raw.replace(/\s+/g, " ") });
+    } catch (_) {
+      // extension vừa tải lại, bỏ qua
+    }
     pending = null;
   }
   // Bắt cú bấm nút Reply/Post của X (chạy trước X để còn đọc được chữ trong ô).
@@ -503,6 +1002,9 @@
       } else if (k === "KeyK") {
         e.preventDefault();
         scrollToArticle(-1);
+      } else if (k === "KeyP") {
+        e.preventDefault();
+        openPostPanel(null);
       } else if (k === "KeyG") {
         e.preventDefault();
         const a = articleAtTop();

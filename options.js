@@ -21,7 +21,14 @@ const DEFAULTS = {
   ollamaFallback: true,
   ollamaImages: false,
   capitalize: true,
-  learn: true
+  learn: true,
+  // Lựa chọn cho bảng Gợi ý bài đăng, mỗi dòng một cái.
+  postPersonas: "",
+  // Kiểu bài: mặc định tick hết (tên khớp POST_STYLES trong background.js).
+  postStyles: "Life quote\nTriết lý\nLời khuyên\nCâu hỏi tương tác\nKể chuyện ngắn\nHài hước\nQuan điểm (hot take)\nDanh sách 3 điều",
+  postTopics: "",
+  postPlaces: "",
+  postTimes: ""
 };
 const FIELDS = Object.keys(DEFAULTS);
 
@@ -45,9 +52,91 @@ function fillGroqSelect(list, current) {
   sel.value = current || (items[0] && items[0].id) || "";
 }
 
-chrome.storage.local.get({ ...DEFAULTS, groqModelList: [], ollamaModelList: [] }, (s) => {
+// ---------- Danh sách tick cho Gợi ý bài đăng ----------
+// Lưu 2 thứ: postX = các mục đã tick (mỗi dòng một mục, bảng trên X đọc cái này), postPool.postX = mọi mục để hiện checkbox.
+const POST_PRESETS = {
+  postPersonas: [
+    "dân văn phòng 28 tuổi, mê cà phê, hay đùa, xưng tui",
+    "dev backend, thích AI và đầu tư dài hạn, viết gọn",
+    "sinh viên năm 3, hay than deadline, xưng mình",
+    "freelancer làm online, hay chia sẻ kinh nghiệm kiếm tiền"
+  ],
+  postStyles: ["Life quote", "Triết lý", "Lời khuyên", "Câu hỏi tương tác", "Kể chuyện ngắn", "Hài hước", "Quan điểm (hot take)", "Danh sách 3 điều"],
+  postTopics: ["ăn vặt", "cà phê", "đi làm, deadline", "AI, công nghệ", "crypto", "kiếm tiền online", "tiền bạc, chi tiêu",
+    "du lịch", "tập gym, sức khoẻ", "phim, nhạc", "bóng đá", "gia đình", "tình yêu", "thời tiết", "kẹt xe"],
+  postPlaces: ["Sài Gòn", "Quận 3, Sài Gòn", "Hà Nội", "Đà Nẵng", "Đà Lạt", "ở nhà", "ở công ty", "quán cà phê", "quê nhà"],
+  postTimes: ["sáng đầu tuần", "trưa nghỉ ở công ty", "chiều tan ca", "tối cuối tuần", "khuya mất ngủ", "cuối tháng hết tiền",
+    "ngày lễ sắp tới", "trời mưa"]
+};
+const lines = (v) => [...new Set(String(v || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))];
+
+function renderChecklist(box, all, checked) {
+  box.innerHTML = '<div class="items"></div><div class="add"><input placeholder="Thêm lựa chọn..." /><button type="button" class="sec">＋ Thêm</button></div>';
+  const items = box.querySelector(".items");
+  const addItem = (v, on) => {
+    if ([...items.querySelectorAll("input")].some((i) => i.value === v)) return;
+    const lb = document.createElement("label");
+    lb.className = "it";
+    lb.title = v;
+    lb.innerHTML = '<input type="checkbox" /><span></span><button type="button" class="del" title="Xoá">×</button>';
+    const cb = lb.querySelector("input");
+    cb.value = v;
+    cb.checked = on;
+    lb.querySelector("span").textContent = v;
+    lb.querySelector(".del").addEventListener("click", (e) => {
+      e.preventDefault();
+      lb.remove();
+      saveChecklists();
+    });
+    items.appendChild(lb);
+  };
+  all.forEach((v) => addItem(v, checked.includes(v)));
+  const inp = box.querySelector(".add input");
+  const add = () => {
+    const v = inp.value.trim();
+    if (!v) return;
+    addItem(v, true); // mục tự thêm thì tick luôn
+    saveChecklists();
+    inp.value = "";
+    inp.focus();
+  };
+  box.querySelector(".add button").addEventListener("click", add);
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      add();
+    }
+  });
+}
+
+// Tick / thêm / xoá là lưu luôn, không cần bấm Lưu.
+function saveChecklists() {
+  chrome.storage.local.get({ postPool: {} }, ({ postPool }) => {
+    const data = { postPool };
+    document.querySelectorAll(".checklist").forEach((el) => {
+      const { all, checked } = readChecklist(el);
+      data[el.id] = checked.join("\n");
+      postPool[el.id] = all;
+    });
+    chrome.storage.local.set(data);
+  });
+}
+document.addEventListener("change", (e) => e.target.closest(".checklist .items") && saveChecklists());
+
+function readChecklist(box) {
+  const all = [...box.querySelectorAll(".items input")];
+  return { all: all.map((i) => i.value), checked: all.filter((i) => i.checked).map((i) => i.value) };
+}
+
+chrome.storage.local.get({ ...DEFAULTS, groqModelList: [], ollamaModelList: [], postPool: {} }, (s) => {
   FIELDS.forEach((k) => {
     const el = document.getElementById(k);
+    if (el && el.classList.contains("checklist")) {
+      const checked = lines(s[k]);
+      // Lần đầu: mục có sẵn + mục đã tick trước đây (từ bản cũ gõ tay).
+      const pool = s.postPool[k] || [...POST_PRESETS[k], ...checked.filter((v) => !POST_PRESETS[k].includes(v))];
+      return renderChecklist(el, pool, checked);
+    }
     if (k === "groqModel") return fillGroqSelect(s.groqModelList, s.groqModel);
     if (k === "ollamaModel") return fillOllamaSelect(s.ollamaModelList, s.ollamaModel);
     if (el && el.type === "checkbox") el.checked = !!s[k];
@@ -107,9 +196,15 @@ async function loadGroqModels() {
 document.getElementById("provider").addEventListener("change", showProvider);
 
 document.getElementById("save").addEventListener("click", () => {
-  const data = {};
+  const data = { postPool: {} };
   FIELDS.forEach((k) => {
     const el = document.getElementById(k);
+    if (el.classList.contains("checklist")) {
+      const { all, checked } = readChecklist(el);
+      data[k] = checked.join("\n");
+      data.postPool[k] = all;
+      return;
+    }
     if (el.type === "checkbox") { data[k] = el.checked; return; }
     const v = el.value;
     data[k] = k === "count" || k === "emojiRepeat" ? Number(v) : ["apiKey", "geminiKey", "groqKey", "groqModel", "ollamaUrl"].includes(k) ? v.trim() : v;

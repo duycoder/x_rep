@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Content Studio</title>
+  <style>
+    :root {
+      --bg: #f5f8fa; --card: #ffffff; --fg: #0f1419; --muted: #536471; --line: #e1e8ed; --accent: #1d9bf0;
+      --accent-soft: rgba(29,155,240,.1); --ok: #00ba7c; --warn: #b45309; --bad: #f4212e; --violet: #7856ff; --shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0b1218; --card: #15202b; --fg: #e7e9ea; --muted: #8b98a5; --line: #2f3b47; --accent-soft: rgba(29,155,240,.18); --shadow: none; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+    a { color: var(--accent); }
+    header.top { position: sticky; top: 0; z-index: 5; background: var(--card); border-bottom: 1px solid var(--line); }
+    .bar { max-width: 1240px; margin: 0 auto; padding: 8px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .bar h1 { font-size: 17px; margin: 0; white-space: nowrap; }
+    .bar .ai { font-size: 12px; color: var(--muted); }
+    nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: auto; }
+    nav button { border: 0; background: transparent; color: var(--muted); font: 600 13px inherit; padding: 7px 11px; border-radius: 999px; cursor: pointer; }
+    nav button.on { color: var(--accent); background: var(--accent-soft); }
+    nav .n { font-size: 11px; background: var(--accent); color: #fff; border-radius: 999px; padding: 0 6px; margin-left: 3px; }
+    main { max-width: 1240px; margin: 0 auto; padding: 16px; }
+    section[hidden] { display: none; }
+    h2 { font-size: 16px; margin: 22px 0 10px; }
+    h2:first-child { margin-top: 4px; }
+    h3 { font-size: 14px; margin: 0 0 6px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; box-shadow: var(--shadow); min-width: 0; }
+    .card + .card { margin-top: 12px; }
+    .grid > .card + .card, .cols > .card + .card { margin-top: 0; }
+    .card .src { font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .err { color: var(--bad); font-size: 12px; }
+    .warnbox { color: var(--warn); font-size: 12px; }
+    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .sp { flex: 1; }
+    button.b { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font: 600 13px inherit; cursor: pointer; white-space: nowrap; }
+    button.b:hover { border-color: var(--accent); color: var(--accent); }
+    button.b.p { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button.b.p:hover { filter: brightness(1.08); color: #fff; }
+    button.b.big { font-size: 15px; padding: 10px 20px; }
+    button.b.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+    button.b.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+    button.b.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+    button.b:disabled { opacity: .5; cursor: default; }
+    button.b.s { padding: 3px 9px; font-size: 12px; font-weight: 500; }
+    input, select, textarea { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; width: 100%; }
+    input[type=checkbox], input[type=radio] { width: auto; }
+    select option { color: #000; }
+    textarea { resize: vertical; }
+    .inl { width: auto; padding: 4px 8px; font-size: 12px; }
+    label.f { display: block; font-weight: 600; margin: 12px 0 4px; }
+    label.f small { display: block; font-weight: 400; color: var(--muted); }
+    .chk { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; cursor: pointer; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; user-select: none; background: var(--card); }
+    .chip input { margin: 0; }
+    .chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    .chip.sub { font-size: 11px; padding: 2px 8px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; }
+    .stat b { display: block; font-size: 22px; line-height: 1.25; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .job { border-radius: 12px; padding: 10px 14px; margin: 0 0 12px; background: var(--accent-soft); display: none; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .job.on { display: flex; }
+    .job.fail { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 8px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+    .badge.New, .badge.PendingReview { background: color-mix(in srgb, #f5a623 18%, transparent); color: #b7791f; }
+    .badge.Approved, .badge.Saved, .badge.active { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+    .badge.Rejected, .badge.Failed, .badge.Dismissed { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+    .badge.Archived, .badge.Skipped, .badge.Cancelled, .badge.paused, .badge.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
+    .badge.Filled, .badge.Drafted, .badge.Explored, .badge.suggested { background: color-mix(in srgb, var(--violet) 16%, transparent); color: var(--violet); }
+    .badge.Published, .badge.Succeeded { background: var(--ok); color: #fff; }
+    .badge.Running { background: var(--accent); color: #fff; }
+    .badge.x { background: var(--fg); color: var(--bg); }
+    .badge.cross { background: linear-gradient(90deg, #f5a623, var(--violet)); color: #fff; }
+    .badge.fact { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+    .badge.opinion { background: color-mix(in srgb, var(--violet) 15%, transparent); color: var(--violet); }
+    .badge.hypothesis { background: color-mix(in srgb, #f5a623 18%, transparent); color: #b7791f; }
+    .badge.o-user, .badge.o-imported { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+    .badge.o-derived { background: var(--accent-soft); }
+    .badge.o-inferred, .badge.o-external { background: color-mix(in srgb, #f5a623 18%, transparent); color: #b7791f; }
+    .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+    .filters button { border: 1px solid var(--line); background: var(--card); color: inherit; border-radius: 999px; padding: 4px 12px; font: 13px inherit; cursor: pointer; }
+    .filters button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+    .filters input, .filters select { width: auto; padding: 4px 10px; font-size: 13px; }
+    .hd { display: flex; gap: 12px; align-items: flex-start; }
+    .hd > .t { flex: 1; min-width: 0; }
+    .score { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 14px;
+      background: conic-gradient(var(--c, var(--accent)) calc(var(--s) * 1%), var(--line) 0); position: relative; }
+    .score::before { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--card); }
+    .score span { position: relative; }
+    .item h3 { font-size: 15px; margin: 0; }
+    .meta { font-size: 12px; color: var(--muted); }
+    .item p { margin: 6px 0; }
+    .lbl { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+    .hook { border-left: 3px solid var(--accent); padding: 2px 10px; margin: 8px 0; font-style: italic; }
+    .refs { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; }
+    .ref { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ref a { color: inherit; }
+    .scores { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+    .list > .card { margin-top: 0; margin-bottom: 12px; }
+    .posts { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+    @media (max-width: 760px) { .posts { grid-template-columns: 1fr; } }
+    .post { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .post .ph { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .post .cnt { margin-left: auto; font-size: 11px; color: var(--muted); }
+    .post .cnt.over { color: var(--bad); font-weight: 700; }
+    .post textarea.c { min-height: 110px; background: var(--bg); }
+    .post .img { border-radius: 10px; overflow: hidden; background: var(--bg); border: 1px dashed var(--line); min-height: 50px; display: grid; place-items: center; position: relative; }
+    .post .img img { width: 100%; max-height: 320px; object-fit: cover; display: block; }
+    .post .img .none { font-size: 12px; color: var(--muted); padding: 12px; text-align: center; }
+    .post .img .cr { position: absolute; left: 6px; bottom: 6px; font-size: 11px; background: rgba(0,0,0,.6); color: #fff; padding: 1px 6px; border-radius: 6px; }
+    details > summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+    details textarea { font-size: 12px; margin-top: 4px; }
+    .idearef { font-size: 11px; color: var(--muted); }
+    .eval { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); font-size: 12px; }
+    .eval .top { display: flex; gap: 10px; align-items: center; }
+    .dims { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px 12px; margin: 6px 0; }
+    .dim { display: grid; grid-template-columns: 90px 1fr 26px; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); }
+    .dim i { display: block; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+    .dim i::after { content: ""; display: block; height: 100%; width: calc(var(--v) * 1%); background: var(--c, var(--accent)); }
+    .eval ul { margin: 4px 0; padding-left: 18px; }
+    .rev { white-space: pre-wrap; border-left: 3px solid var(--ok); padding: 4px 8px; margin: 6px 0; background: var(--card); border-radius: 0 6px 6px 0; font-size: 13px; }
+    .flag { color: var(--bad); font-weight: 600; }
+    .sgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+    .sgrid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; cursor: pointer; }
+    .sgrid img:hover { outline: 2px solid var(--accent); }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+    .cols3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 14px; }
+    @media (max-width: 860px) { .two, .cols, .cols3 { grid-template-columns: 1fr; } }
+    .side { display: grid; grid-template-columns: 290px 1fr; gap: 14px; align-items: start; }
+    @media (max-width: 900px) { .side { grid-template-columns: 1fr; } }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table-wrap { overflow-x: auto; }
+    .empty { text-align: center; color: var(--muted); padding: 26px 10px; }
+    .news { padding-left: 18px; margin: 0; }
+    .news li { margin-bottom: 3px; }
+    .news a { color: inherit; text-decoration: none; }
+    .news a:hover { color: var(--accent); }
+    .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 16px;
+      border-radius: 999px; font-size: 13px; display: none; z-index: 20; max-width: 90vw; text-align: center; }
+    .note { font-size: 12px; color: var(--muted); }
+    .rule { border-left: 3px solid var(--accent); padding: 6px 10px; background: var(--accent-soft); border-radius: 0 8px 8px 0; font-size: 13px; margin: 0 0 12px; }
+    .hero { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    .hero .pos { flex: 1; min-width: 260px; font-size: 15px; }
+    .sess { padding: 8px 10px; border-radius: 10px; cursor: pointer; border: 1px solid transparent; }
+    .sess:hover { background: var(--bg); }
+    .sess.on { border-color: var(--accent); background: var(--accent-soft); }
+    .distrow { display: grid; grid-template-columns: 170px 1fr 70px; gap: 8px; align-items: center; font-size: 12px; margin: 4px 0; }
+    .distbar { position: relative; height: 10px; border-radius: 5px; background: var(--line); }
+    .distbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: var(--accent); }
+    .distbar u { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--fg); opacity: .6; }
+    .dir { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: var(--card); }
+    .dir .kids { margin: 8px 0 0 18px; border-left: 2px solid var(--line); padding-left: 12px; }
+    .dir .kids .dir { background: var(--bg); }
+    .dir .dh { display: flex; gap: 8px; align-items: center; }
+    .dir .dh input.nm { font-weight: 700; flex: 1; }
+    .dir .more { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 8px; }
+    .dir .more[hidden] { display: none; }
+    @media (max-width: 760px) { .dir .more { grid-template-columns: 1fr; } }
+    .dir .more label { font-size: 11px; color: var(--muted); display: block; }
+    .dir.paused, .dir.archived { opacity: .6; }
+    .kn { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); align-items: center; }
+    .kn.off { opacity: .5; }
+    .kn input.tx { border-color: transparent; padding: 4px 6px; }
+    .kn input.tx:focus { border-color: var(--line); }
+    .ctxtable td:first-child { font-weight: 700; white-space: nowrap; }
+    form.inline { border: 1px solid var(--accent); border-radius: 12px; padding: 10px; margin-top: 10px; background: var(--accent-soft); }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div class="bar">
+      <h1>📋 Content Studio</h1>
+      <span class="ai" id="aiInfo"></span>
+      <nav id="nav">
+        <button data-tab="dash" class="on">Tổng quan</button>
+        <button data-tab="discover">Khám phá <span class="n" id="nOpps" hidden></span></button>
+        <button data-tab="ideas">Ý tưởng <span class="n" id="nIdeas" hidden></span></button>
+        <button data-tab="posts">Bài viết <span class="n" id="nPosts" hidden></span></button>
+        <button data-tab="knowledge">Kiến thức cá nhân</button>
+        <button data-tab="directions">Định hướng <span class="n" id="nDirs" hidden></span></button>
+        <button data-tab="sources">Nguồn dữ liệu</button>
+        <button data-tab="ai">AI &amp; chi phí</button>
+        <button data-tab="settings">Cài đặt</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="job" id="jobBanner"></div>
+
+    <!-- ===== Tổng quan ===== -->
+    <section id="tab-dash">
+      <div class="card hero">
+        <div class="pos"><div class="lbl">Định vị của bạn</div><div id="dashPos"></div></div>
+        <button class="b" data-goto-tab="discover">Tuỳ chỉnh phiên →</button>
+        <button class="b p big" id="btnQuickDiscover">🔍 Khám phá nội dung</button>
+      </div>
+      <h2>Ngữ cảnh lúc này <button class="b s" id="btnCollect" style="margin-left:6px">🔄 Cập nhật</button></h2>
+      <div class="grid" id="ctxCards"></div>
+      <h2>Chỉ số</h2>
+      <div class="stats" id="stats"></div>
+      <div class="cols" style="margin-top:12px">
+        <div class="card"><h3>💡 Ý tưởng nên xem</h3><div id="dashIdeas"></div></div>
+        <div class="card"><h3>🎯 Cơ hội mới</h3><div id="dashOpps"></div></div>
+        <div class="card"><h3>📝 Bản nháp chờ duyệt</h3><div id="dashDrafts"></div></div>
+        <div class="card"><h3>✅ Đăng gần đây</h3><div id="dashPublished"></div></div>
+        <div class="card"><h3>🧭 Phân bổ theo định hướng</h3><div id="dashDist"></div><div class="note">Cột xanh: tỉ lệ bài đã duyệt/đăng. Vạch đen: tỉ lệ nhắm tới (chỉ để tham khảo).</div></div>
+        <div class="card"><h3>🤖 AI hôm nay</h3><div id="dashAi"></div></div>
+      </div>
+      <h2>Phiên khám phá gần đây</h2>
+      <div class="card" id="dashSessions"></div>
+    </section>
+
+    <!-- ===== Khám phá ===== -->
+    <section id="tab-discover" hidden>
+      <div class="card" id="discoverForm"></div>
+      <div class="side" style="margin-top:14px">
+        <div class="card"><h3>Các phiên</h3><div id="sessionList"></div></div>
+        <div id="sessionDetail"></div>
+      </div>
+    </section>
+
+    <!-- ===== Ý tưởng ===== -->
+    <section id="tab-ideas" hidden>
+      <div class="filters" id="ideaFilters"></div>
+      <div class="list" id="ideaList"></div>
+    </section>
+
+    <!-- ===== Bài viết ===== -->
+    <section id="tab-posts" hidden>
+      <div class="filters" id="postFilters"></div>
+      <div id="newPostBox"></div>
+      <div class="posts" id="postList"></div>
+    </section>
+
+    <!-- ===== Kiến thức cá nhân ===== -->
+    <section id="tab-knowledge" hidden>
+      <div class="rule">AI chỉ kể trải nghiệm riêng của bạn khi nó nằm trong mục <b>Trải nghiệm có thật</b> và có nguồn gốc <b>Bạn nhập / Bạn nhập từ file / Rút từ bài đã duyệt</b>. Mục "Suy đoán" hay "Nguồn ngoài" không bao giờ được coi là sự thật về bạn.</div>
+      <div class="cols">
+        <div>
+          <div class="card" id="profileCard"></div>
+          <div class="card" id="prefsCard"></div>
+        </div>
+        <div class="card" id="knCard"></div>
+      </div>
+    </section>
+
+    <!-- ===== Định hướng ===== -->
+    <section id="tab-directions" hidden>
+      <div id="dirSuggest"></div>
+      <div class="card">
+        <div class="row"><h3 style="margin:0">Định hướng nội dung</h3><span class="sp"></span><span class="note" id="dirSum"></span>
+          <button class="b s" id="addRootDir">＋ Thêm định hướng</button><button class="b p s" id="saveDirs">Lưu định hướng</button></div>
+        <p class="note">Đây là điểm xuất phát, không phải giới hạn. Một ý tưởng có thể thuộc nhiều định hướng. Tỉ lệ chỉ là gợi ý, không phải chỉ tiêu. "Tạm dừng" thì AI bỏ qua, "Lưu trữ" thì cất đi.</p>
+        <div id="dirTree"></div>
+      </div>
+    </section>
+
+    <!-- ===== Nguồn dữ liệu ===== -->
+    <section id="tab-sources" hidden>
+      <p class="note">Mỗi nguồn là một adapter: bật/tắt, lọc theo từ khoá, giới hạn số mục, xem sức khoẻ. Mọi mục thu về giữ link gốc, nguồn, giờ đăng, giờ lấy và độ tin. Nội dung từ nguồn ngoài chỉ là dữ liệu: AI được dặn không làm theo câu lệnh nằm trong đó.</p>
+      <div class="grid" id="sourceCards"></div>
+    </section>
+
+    <!-- ===== AI & chi phí ===== -->
+    <section id="tab-ai" hidden>
+      <div class="cols">
+        <div class="card" id="routingCard"></div>
+        <div class="card" id="providerCard"></div>
+      </div>
+      <div class="card" id="usageCard" style="margin-top:12px"></div>
+      <div class="card" id="weightsCard"></div>
+      <div class="card"><h3>Lịch sử chạy</h3><div class="table-wrap"><table><thead><tr><th>Bắt đầu</th><th>Việc</th><th>Trạng thái</th><th>Kết quả</th><th class="num">Thời gian</th></tr></thead><tbody id="jobRows"></tbody></table></div></div>
+    </section>
+
+    <!-- ===== Cài đặt ===== -->
+    <section id="tab-settings" hidden>
+      <div class="cols">
+        <div class="card" id="setGeneral"></div>
+        <div class="card" id="setData"></div>
+      </div>
+    </section>
+  </main>
+  <div class="toast" id="toast"></div>
+  <script src="imagekit.js"></script>
+  <script src="studio.js"></script>
+</body>
+</html>

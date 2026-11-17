@@ -1,0 +1,11 @@
+{
+  "name": "x-comment-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "adm-zip": "^0.5.16"
+  }
+}

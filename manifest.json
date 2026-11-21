@@ -12,7 +12,13 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["templates.js", "imagekit.js", "content.js"],
+      "js": ["xhook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["templates.js", "imagekit.js", "postopts.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

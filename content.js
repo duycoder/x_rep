@@ -91,6 +91,10 @@
   host.style.all = "initial";
   document.documentElement.appendChild(host);
   const shadow = host.attachShadow({ mode: "open" });
+  // Các nhóm lựa chọn của bảng Gợi ý bài đăng (postopts.js).
+  const POST_GROUPS = self.XCSPostOpts.GROUPS;
+  const groupsHtml = (gs) =>
+    gs.map((g) => `<label>${g.label} <span class="opt-none">${g.none}</span></label><div class="chips" data-k="${g.key}"></div>`).join("");
   shadow.innerHTML = `
     <style>
       :host { all: initial; }
@@ -150,6 +154,10 @@
       .chips input.addin { flex: 1 1 140px; min-width: 120px; border: 1px solid #1d9bf0; border-radius: 999px; padding: 4px 10px;
         font: 13px/1.25 inherit; background: transparent; color: inherit; outline: none; }
       .postform .now { font-size: 11px; opacity: .65; margin-top: 2px; }
+      .moreopts { margin-top: 8px; border-top: 1px dashed rgba(127,127,127,.4); padding-top: 6px; }
+      .moreopts summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #1d9bf0; list-style: none; }
+      .moreopts summary::-webkit-details-marker { display: none; }
+      .moreopts .morecnt { font-weight: 400; opacity: .75; color: inherit; }
       .imgbar { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; align-items: center; }
       .imgbar .lbl { font-size: 11px; opacity: .6; margin-right: 2px; }
       button.mini { border: 1px solid rgba(127,127,127,.45); background: transparent; color: inherit; border-radius: 999px;
@@ -172,17 +180,33 @@
       .wait { font-size: 12px; opacity: .7; padding: 6px 0; }
       .len { font-size: 11px; opacity: .6; margin-left: auto; align-self: center; }
       .len.over { color: #f4212e; opacity: 1; }
+      .dock .stats { margin: 0 8px 8px; border: 1px solid rgba(127,127,127,.3); border-radius: 10px; padding: 4px 8px; font-size: 12px; }
+      .stats table { width: 100%; border-collapse: collapse; }
+      .stats th, .stats td { padding: 2px 4px; text-align: right; white-space: nowrap; }
+      .stats th { font-weight: 600; opacity: .6; font-size: 11px; }
+      .stats th:first-child, .stats td:first-child { text-align: left; }
+      .stats td.today { font-weight: 700; color: #1d9bf0; }
+      .dock { position: fixed; z-index: 2147483646; right: 16px; top: 70px; background: #fff; color: #0f1419;
+        border: 1px solid #cfd9de; border-radius: 14px; box-shadow: 0 4px 14px rgba(0,0,0,.15);
+        font: 13px/1.35 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; cursor: grab; user-select: none; touch-action: none; }
+      .dock .pill { padding: 6px 8px 6px 11px; white-space: nowrap; display: flex; align-items: center; gap: 10px; }
+      .dock .newpost { margin-left: auto; border: 0; border-radius: 999px; background: #1d9bf0; color: #fff; cursor: pointer;
+        font: 600 12px/1 inherit; padding: 6px 10px; }
+      .dock .newpost:hover { filter: brightness(1.1); }
+      .dock .last { font-size: 11px; opacity: .65; margin-top: 4px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dock .fix { margin-top: 4px; border: 0; background: transparent; color: #1d9bf0; cursor: pointer; font: 11px inherit; padding: 0; }
+      .dock .pill b { color: #1d9bf0; }
+      .dock .stats { margin: 0 8px 8px; cursor: default; }
+      @media (prefers-color-scheme: dark) { .dock { background: #15202b; color: #e7e9ea; border-color: #38444d; } }
     </style>
+    <div class="dock" title="Kéo để dời chỗ"><div class="pill"></div><div class="stats"></div></div>
     <div class="panel" role="dialog" aria-label="Gợi ý bình luận">
       <header><b class="title">Gợi ý bình luận</b><button class="x" title="Đóng (Esc)">✕</button></header>
       <div class="body">
         <div class="preview"></div>
         <div class="postform">
-          <label>Con người tôi</label><div class="chips" data-k="persona"></div>
-          <label>Kiểu bài <span class="opt-none">không chọn = trộn nhiều kiểu</span></label><div class="chips" data-k="style"></div>
-          <label>Chủ đề <span class="opt-none">không chọn = AI tự chọn</span></label><div class="chips" data-k="topic"></div>
-          <label>Địa điểm <span class="opt-none">không chọn = không nhắc nơi nào</span></label><div class="chips" data-k="place"></div>
-          <label>Thời điểm / dịp <span class="opt-none">không chọn = bây giờ</span></label><div class="chips" data-k="when"></div>
+          ${groupsHtml(POST_GROUPS.filter((g) => !g.more))}
+          <details class="moreopts"><summary>⚙ Thêm tuỳ chọn <span class="morecnt"></span></summary>${groupsHtml(POST_GROUPS.filter((g) => g.more))}</details>
           <div class="now"></div>
         </div>
         <div class="hint">
@@ -195,15 +219,124 @@
     </div>`;
 
   const panel = shadow.querySelector(".panel");
+
+  // ---------- Đếm bài đăng / trả lời theo ngày giờ Việt Nam (UTC+7) ----------
+  // Kho "activity": { "2026-11-21": { post, reply, post_ai, reply_ai } }. Đếm mọi lần bạn bấm Đăng/Trả lời trên X.
+  const escapeHtml = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const vnDay = (ts = Date.now()) => new Date(ts + 7 * 3600e3).toISOString().slice(0, 10);
+  function statsTable(activity) {
+    const day = (i) => activity[vnDay(Date.now() - i * 86400e3)] || {};
+    const sum = (k, n) => Array.from({ length: n }, (_, i) => day(i)[k] || 0).reduce((a, b) => a + b, 0);
+    const row = (label, k) => `<tr><td>${label}</td><td class="today">${day(0)[k] || 0}</td><td>${day(1)[k] || 0}</td><td>${sum(k, 7)}</td></tr>`;
+    return `<table><tr><th>Giờ VN</th><th>Hôm nay</th><th>Hôm qua</th><th>7 ngày</th></tr>
+      ${row("📝 Bài đăng", "post")}${row("💬 Trả lời", "reply")}
+      <tr><td title="Số lần bạn đăng câu lấy từ gợi ý của extension">🤖 Dùng gợi ý</td><td class="today">${(day(0).post_ai || 0) + (day(0).reply_ai || 0)}</td><td>${(day(1).post_ai || 0) + (day(1).reply_ai || 0)}</td><td>${sum("post_ai", 7) + sum("reply_ai", 7)}</td></tr></table>`;
+  }
+  // Bảng đếm luôn hiện ở góc trên bên phải trang X; kéo để dời chỗ (nhớ vị trí, kho "dockPos").
+  const dock = shadow.querySelector(".dock");
+  const dockPill = dock.querySelector(".pill");
+  const dockStats = dock.querySelector(".stats");
+  function renderDock() {
+    chrome.storage.local.get({ activity: {}, activityLast: null, dockPos: { x: null, y: null } }, ({ activity, activityLast: last, dockPos: dockState }) => {
+      const t = activity[vnDay()] || {};
+      dockPill.innerHTML = `<span>Hôm nay: 📝 <b>${t.post || 0}</b> bài · 💬 <b>${t.reply || 0}</b> trả lời</span><button class="newpost" title="Viết bài mới (Alt+P)">✍️ Gợi ý bài</button>`;
+      const hm = (ts) => new Date(ts).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+      dockStats.innerHTML =
+        statsTable(activity) +
+        `<div class="last">${last ? `Gần nhất: ${last.kind === "reply" ? "💬 trả lời" : "📝 bài"} ${hm(last.at)}${last.ai ? " (gợi ý)" : ""} · “${escapeHtml(last.text)}”` : "Chưa đếm được lần đăng nào từ lúc bật"}</div>` +
+        `<button class="fix" title="Sửa số hôm nay cho khớp X Analytics">✎ Sửa số hôm nay</button>`;
+      if (dockState.x != null) {
+        // Cửa sổ nhỏ lại thì kéo ô về trong màn hình.
+        const x = Math.max(0, Math.min(innerWidth - 80, dockState.x));
+        const y = Math.max(0, Math.min(innerHeight - 40, dockState.y));
+        Object.assign(dock.style, { left: `${x}px`, top: `${y}px`, right: "auto" });
+      }
+    });
+  }
+  let drag = null;
+  dock.addEventListener("click", (e) => {
+    if (e.target.closest(".newpost")) openPostPanel(null);
+    if (e.target.closest(".fix")) {
+      chrome.storage.local.get({ activity: {} }, ({ activity }) => {
+        const d = vnDay();
+        const rec = (activity[d] = activity[d] || { post: 0, reply: 0, post_ai: 0, reply_ai: 0 });
+        const p = prompt("Số BÀI ĐĂNG hôm nay (giờ VN):", rec.post || 0);
+        if (p === null) return;
+        const r = prompt("Số TRẢ LỜI hôm nay (giờ VN):", rec.reply || 0);
+        if (r === null) return;
+        rec.post = Math.max(0, parseInt(p, 10) || 0);
+        rec.reply = Math.max(0, parseInt(r, 10) || 0);
+        chrome.storage.local.set({ activity });
+      });
+    }
+  });
+  dock.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return; // bấm nút, không phải kéo
+    const r = dock.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, x0: e.clientX, y0: e.clientY, moved: false };
+    dock.setPointerCapture(e.pointerId);
+  });
+  dock.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    const x = Math.max(0, Math.min(innerWidth - dock.offsetWidth, e.clientX - drag.dx));
+    const y = Math.max(0, Math.min(innerHeight - dock.offsetHeight, e.clientY - drag.dy));
+    Object.assign(dock.style, { left: `${x}px`, top: `${y}px`, right: "auto", cursor: "grabbing" });
+  });
+  dock.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag = null;
+    dock.style.cursor = "";
+    if (!moved) return;
+    const r = dock.getBoundingClientRect();
+    chrome.storage.local.set({ dockPos: { x: Math.round(r.left), y: Math.round(r.top) } });
+  });
+  renderDock();
+  const dockTimer = setInterval(() => {
+    if (!chrome.runtime?.id) return clearInterval(dockTimer); // extension vừa tải lại: trang cũ thôi cập nhật
+    renderDock(); // qua 0h giờ VN thì tự sang ngày mới
+  }, 60e3);
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area !== "local") return;
+    if (ch.activity || ch.dockPos || ch.activityLast) renderDock();
+  });
+  // Đếm theo lệnh đăng bài thật của X (xhook.js nghe CreateTweet, chỉ báo khi đăng thành công).
+  // Cú bấm nút chỉ dùng để biết lần đăng đó có lấy câu gợi ý của extension không.
+  let aiHint = null;
+  function trackSend() {
+    aiHint = pending && Date.now() - pending.at < 30 * 60e3 ? { kind: pending.kind === "post" ? "post" : "reply", at: Date.now() } : null;
+  }
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== window || !m || m.source !== "xcs-hook" || m.type !== "tweet-created") return;
+    const kind = m.kind === "reply" ? "reply" : "post";
+    const ai = !!aiHint && aiHint.kind === kind && Date.now() - aiHint.at < 60e3;
+    if (ai) aiHint = null;
+    try {
+      chrome.storage.local.get({ activity: {} }, ({ activity }) => {
+        const d = vnDay();
+        const rec = (activity[d] = activity[d] || { post: 0, reply: 0, post_ai: 0, reply_ai: 0 });
+        rec[kind] = (rec[kind] || 0) + 1;
+        if (ai) rec[`${kind}_ai`] = (rec[`${kind}_ai`] || 0) + 1;
+        for (const k of Object.keys(activity)) if (k < vnDay(Date.now() - 90 * 86400e3)) delete activity[k];
+        chrome.storage.local.set({ activity, activityLast: { kind, ai, at: Date.now(), text: String(m.text || "").slice(0, 60) } });
+      });
+    } catch (_) {
+      // extension vừa tải lại
+    }
+  });
   const preview = shadow.querySelector(".preview");
   const contentBox = shadow.querySelector(".content");
   const hintInput = shadow.querySelector(".hint input");
   const regenBtn = shadow.querySelector(".regen");
   const titleEl = shadow.querySelector(".title");
   const footEl = shadow.querySelector(".foot");
-  // Lựa chọn đang bật của bảng bài đăng: { persona, topic, place, when } (chuỗi rỗng = không chọn).
-  let postSel = { persona: "", style: "", topic: "", place: "", when: "" };
-  const STYLE_DEFAULT = "Life quote\nTriết lý\nLời khuyên\nCâu hỏi tương tác\nKể chuyện ngắn\nHài hước\nQuan điểm (hot take)\nDanh sách 3 điều";
+  // Lựa chọn đang bật của bảng bài đăng: nhóm chọn một = chuỗi ("" = không chọn), nhóm chọn nhiều = mảng.
+  let postSel = {};
+  const GROUP = Object.fromEntries(POST_GROUPS.map((g) => [g.key, g]));
+  const selOn = (k, v) => (GROUP[k].multi ? (postSel[k] || []).includes(v) : postSel[k] === v);
   const nowEl = shadow.querySelector(".postform .now");
   // Chế độ "post": viết bài đăng mới. POST_KEY thay cho currentArticle để các hàm dùng chung biết bảng đang mở.
   const POST_KEY = { post: true };
@@ -255,44 +388,69 @@
     hintInput.value = "";
     contentBox.innerHTML = '<div class="hint" style="display:block;opacity:.7">Bấm chọn rồi bấm <b>Tạo bài</b>.</div>';
     nowEl.textContent = nowLabel() + " (luôn gửi kèm cho AI)";
-    chrome.storage.local.get(
-      { persona: "", postPersonas: "", postStyles: STYLE_DEFAULT, postTopics: "", postPlaces: "", postTimes: "", postSel: null },
-      (s) => {
-        const lines = (v) => [...new Set(String(v || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))];
-        const lists = {
-          persona: lines(s.postPersonas).length ? lines(s.postPersonas) : lines(s.persona.replace(/\r?\n/g, " ")),
-          style: lines(s.postStyles),
-          topic: lines(s.postTopics),
-          place: lines(s.postPlaces),
-          when: lines(s.postTimes)
-        };
-        // Giữ lựa chọn lần trước nếu vẫn còn trong danh sách. Có đúng 1 "con người" thì chọn sẵn.
-        const prev = s.postSel || {};
-        postSel = {};
-        for (const k of Object.keys(lists)) postSel[k] = lists[k].includes(prev[k]) ? prev[k] : "";
-        if (!postSel.persona && lists.persona.length === 1) postSel.persona = lists.persona[0];
-        for (const k of Object.keys(lists)) renderChips(k, lists[k]);
-        panel.classList.add("open");
+    const want = { persona: "", postSel: null, postSpecV3: false, postMoreOpen: false };
+    POST_GROUPS.forEach((g) => (want[g.store] = null));
+    chrome.storage.local.get(want, (s) => {
+      const lines = (v) => [...new Set(String(v || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))];
+      const lists = {};
+      const save = {};
+      for (const g of POST_GROUPS) {
+        let list;
+        if (s[g.store] == null) {
+          // Chưa từng chỉnh: hiện sẵn các lựa chọn mặc định (con người thì thêm ô "Bạn là ai?" nếu có).
+          list = g.key === "persona" && s.persona.trim() ? [s.persona.replace(/\r?\n/g, " ").trim(), ...g.presets] : [...g.presets];
+          save[g.store] = list.join("\n");
+        } else {
+          list = lines(s[g.store]);
+          // Cập nhật lên bộ lựa chọn mới (một lần): thêm mục mới vào nhóm cũ, giữ nguyên mục bạn đã có.
+          if (!s.postSpecV3) {
+            const merged = [...list, ...g.presets.filter((v) => !list.includes(v))];
+            if (merged.length !== list.length) save[g.store] = merged.join("\n");
+            list = merged;
+          }
+        }
+        lists[g.key] = list;
       }
-    );
+      save.postSpecV3 = true;
+      chrome.storage.local.set(save);
+      // Giữ lựa chọn lần trước nếu vẫn còn trong danh sách.
+      const prev = s.postSel || {};
+      postSel = {};
+      for (const g of POST_GROUPS) {
+        const pv = [].concat(prev[g.key] || []).filter((v) => lists[g.key].includes(v));
+        postSel[g.key] = g.multi ? pv : pv[0] || "";
+      }
+      for (const g of POST_GROUPS) renderChips(g.key, lists[g.key]);
+      const det = shadow.querySelector(".moreopts");
+      det.open = !!s.postMoreOpen;
+      det.ontoggle = () => chrome.storage.local.set({ postMoreOpen: det.open });
+      updateMoreCount();
+      panel.classList.add("open");
+    });
+  }
+  // Số lựa chọn đang bật trong mục "Thêm tuỳ chọn" (để biết khi nó đang thu gọn).
+  function updateMoreCount() {
+    const n = POST_GROUPS.filter((g) => g.more).reduce((a, g) => a + (g.multi ? (postSel[g.key] || []).length : postSel[g.key] ? 1 : 0), 0);
+    shadow.querySelector(".morecnt").textContent = n ? `· đang chọn ${n}` : "(tâm trạng, giọng, mục tiêu, mở đầu, CTA, độ dài, ngôn ngữ, ảnh)";
   }
 
-  // Nhóm lựa chọn → khoá trong kho (dùng chung với trang Cài đặt: postX = mục đã tick, postPool.postX = mọi mục).
-  const POST_LIST_KEY = { persona: "postPersonas", style: "postStyles", topic: "postTopics", place: "postPlaces", when: "postTimes" };
-  const ADD_PH = { persona: "vd: dev 30 tuổi, xưng mình", style: "vd: Tâm sự đêm khuya", topic: "vd: chạy bộ", place: "vd: Đà Lạt", when: "vd: sáng thứ Hai mưa" };
+  const ADD_PH = { persona: "vd: dev 30 tuổi, xưng mình", style: "vd: Tâm sự đêm khuya", topic: "vd: chạy bộ", place: "vd: Đà Lạt", when: "vd: sáng thứ Hai mưa", mood: "vd: háo hức" };
   function renderChips(k, items) {
     const box = shadow.querySelector(`.chips[data-k="${k}"]`);
     box.innerHTML = "";
-    box._items = items;
     items.forEach((v) => {
       const c = document.createElement("button");
       c.type = "button";
-      c.className = "chip" + (postSel[k] === v ? " on" : "");
+      c.className = "chip" + (selOn(k, v) ? " on" : "");
       c.textContent = v;
       c.title = `${v}\n(chuột phải để bỏ khỏi bảng)`;
       c.addEventListener("click", () => {
-        postSel[k] = postSel[k] === v ? "" : v; // bấm lại để bỏ chọn
-        box.querySelectorAll(".chip:not(.add)").forEach((x) => x.classList.toggle("on", x.textContent === postSel[k]));
+        if (GROUP[k].multi) {
+          const cur = postSel[k] || [];
+          postSel[k] = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
+        } else postSel[k] = postSel[k] === v ? "" : v; // bấm lại để bỏ chọn
+        box.querySelectorAll(".chip:not(.add)").forEach((x) => x.classList.toggle("on", selOn(k, x.textContent)));
+        updateMoreCount();
         chrome.storage.local.set({ postSel });
       });
       c.addEventListener("contextmenu", (e) => {
@@ -319,7 +477,8 @@
         done = true;
         const v = inp.value.replace(/\s+/g, " ").trim();
         if (save && v) {
-          postSel[k] = v;
+          if (GROUP[k].multi) postSel[k] = [...new Set([...(postSel[k] || []), v])];
+          else postSel[k] = v;
           saveChipList(k, items.includes(v) ? items : [...items, v], v, true);
         } else renderChips(k, items);
       };
@@ -334,9 +493,13 @@
   }
   // Lưu danh sách đã tick của nhóm k; mục mới thì thêm vào kho chung để trang Cài đặt cũng thấy.
   function saveChipList(k, list, v, added) {
-    const key = POST_LIST_KEY[k];
-    if (!added && postSel[k] === v) postSel[k] = "";
+    const key = GROUP[k].store;
+    if (!added) {
+      if (GROUP[k].multi) postSel[k] = (postSel[k] || []).filter((x) => x !== v);
+      else if (postSel[k] === v) postSel[k] = "";
+    }
     renderChips(k, list);
+    updateMoreCount();
     chrome.storage.local.get({ postPool: {} }, ({ postPool }) => {
       if (added && postPool[key] && !postPool[key].includes(v)) postPool[key] = [...postPool[key], v];
       chrome.storage.local.set({ [key]: list.join("\n"), postPool, postSel }, () => {
@@ -588,7 +751,8 @@
       ta.addEventListener("input", upd);
       upd();
       row.append(len);
-      item.append(ta, row, ...imageTools(item, ta, imgDesc));
+      // Chọn "không ảnh" thì thôi hiện công cụ ảnh.
+      item.append(ta, row, ...(postSel.image === "không ảnh" ? [] : imageTools(item, ta, imgDesc)));
       return item;
     }
     item.append(ta, row);
@@ -624,7 +788,8 @@
     };
     // imgDesc dạng "từ khoá | mô tả" (AI viết). Vẽ thì dùng cả câu, tìm thì dùng từ khoá.
     const [kwPart, descPart] = String(imgDesc || "").includes("|") ? imgDesc.split("|").map((x) => x.trim()) : ["", String(imgDesc || "").trim()];
-    const desc = () => [kwPart, descPart].filter(Boolean).join(", ") || ta.value;
+    const imgStyle = self.XCSPostOpts.IMAGE_STYLE_EN[postSel.image] || "";
+    const desc = () => [[kwPart, descPart].filter(Boolean).join(", ") || ta.value, imgStyle].filter(Boolean).join(", ");
     const KW_STOP = new Set(("a an the of on in at with and or to for from by into over under near behind beside while is are sitting standing " +
       "looking holding drinking relaxing walking reading listening wearing focus shot close-up closeup background blurred warm soft natural " +
       "lighting light style photo image scene view young old man woman person people his her their its cozy beautiful").split(" "));
@@ -905,7 +1070,11 @@
   document.addEventListener(
     "click",
     (e) => {
-      if (e.target.closest && e.target.closest('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]')) savePosted();
+      const btn = e.target.closest && e.target.closest('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]');
+      if (btn) {
+        trackSend();
+        savePosted();
+      }
     },
     true
   );
@@ -913,7 +1082,10 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.closest?.('[data-testid="tweetTextarea_0"]')) savePosted();
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.closest?.('[data-testid="tweetTextarea_0"]')) {
+        trackSend();
+        savePosted();
+      }
     },
     true
   );

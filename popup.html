@@ -10,11 +10,18 @@
     ul { padding-left: 18px; margin: 6px 0 10px; }
     kbd { border: 1px solid #8b98a5; border-radius: 4px; padding: 0 4px; font-size: 11px; }
     .st { font-size: 12px; margin-bottom: 10px; }
+    .stats { border: 1px solid rgba(127,127,127,.3); border-radius: 10px; padding: 4px 8px; margin-bottom: 10px; }
+    .stats table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .stats th, .stats td { padding: 2px 4px; text-align: right; white-space: nowrap; }
+    .stats th { font-weight: 600; opacity: .6; font-size: 11px; }
+    .stats th:first-child, .stats td:first-child { text-align: left; }
+    .stats td.today { font-weight: 700; color: #1d9bf0; }
     button { width: 100%; background: #1d9bf0; color: #fff; border: 0; border-radius: 999px; padding: 8px; font-weight: 600; cursor: pointer; }
   </style>
 </head>
 <body>
   <h1>X Gợi Ý Bình Luận</h1>
+  <div class="stats" id="stats"></div>
   <div class="st" id="st"></div>
   <ul>
     <li>Bấm <b>💬 Gợi ý</b> dưới mỗi bài trên x.com</li>

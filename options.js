@@ -22,13 +22,8 @@ const DEFAULTS = {
   ollamaImages: false,
   capitalize: true,
   learn: true,
-  // Lựa chọn cho bảng Gợi ý bài đăng, mỗi dòng một cái.
-  postPersonas: "",
-  // Kiểu bài: mặc định tick hết (tên khớp POST_STYLES trong background.js).
-  postStyles: "Life quote\nTriết lý\nLời khuyên\nCâu hỏi tương tác\nKể chuyện ngắn\nHài hước\nQuan điểm (hot take)\nDanh sách 3 điều",
-  postTopics: "",
-  postPlaces: "",
-  postTimes: ""
+  // Lựa chọn cho bảng Gợi ý bài đăng (mỗi dòng một cái): mặc định tick hết các mục có sẵn trong postopts.js.
+  ...Object.fromEntries(self.XCSPostOpts.GROUPS.map((g) => [g.store, g.presets.join(String.fromCharCode(10))]))
 };
 const FIELDS = Object.keys(DEFAULTS);
 
@@ -54,20 +49,21 @@ function fillGroqSelect(list, current) {
 
 // ---------- Danh sách tick cho Gợi ý bài đăng ----------
 // Lưu 2 thứ: postX = các mục đã tick (mỗi dòng một mục, bảng trên X đọc cái này), postPool.postX = mọi mục để hiện checkbox.
-const POST_PRESETS = {
-  postPersonas: [
-    "dân văn phòng 28 tuổi, mê cà phê, hay đùa, xưng tui",
-    "dev backend, thích AI và đầu tư dài hạn, viết gọn",
-    "sinh viên năm 3, hay than deadline, xưng mình",
-    "freelancer làm online, hay chia sẻ kinh nghiệm kiếm tiền"
-  ],
-  postStyles: ["Life quote", "Triết lý", "Lời khuyên", "Câu hỏi tương tác", "Kể chuyện ngắn", "Hài hước", "Quan điểm (hot take)", "Danh sách 3 điều"],
-  postTopics: ["ăn vặt", "cà phê", "đi làm, deadline", "AI, công nghệ", "crypto", "kiếm tiền online", "tiền bạc, chi tiêu",
-    "du lịch", "tập gym, sức khoẻ", "phim, nhạc", "bóng đá", "gia đình", "tình yêu", "thời tiết", "kẹt xe"],
-  postPlaces: ["Sài Gòn", "Quận 3, Sài Gòn", "Hà Nội", "Đà Nẵng", "Đà Lạt", "ở nhà", "ở công ty", "quán cà phê", "quê nhà"],
-  postTimes: ["sáng đầu tuần", "trưa nghỉ ở công ty", "chiều tan ca", "tối cuối tuần", "khuya mất ngủ", "cuối tháng hết tiền",
-    "ngày lễ sắp tới", "trời mưa"]
+const OLD_PRESETS = {
+  postPersonas: ["dân văn phòng 28 tuổi, mê cà phê, hay đùa, xưng tui", "dev backend, thích AI và đầu tư dài hạn, viết gọn",
+    "sinh viên năm 3, hay than deadline, xưng mình", "freelancer làm online, hay chia sẻ kinh nghiệm kiếm tiền"],
+  postTopics: ["ăn vặt", "cà phê", "đi làm, deadline", "crypto", "kiếm tiền online", "du lịch", "tập gym, sức khoẻ", "bóng đá", "thời tiết", "kẹt xe"],
+  postPlaces: ["Sài Gòn", "Quận 3, Sài Gòn", "Đà Nẵng", "Đà Lạt"],
+  postTimes: ["sáng đầu tuần", "trưa nghỉ ở công ty", "cuối tháng hết tiền", "ngày lễ sắp tới"]
 };
+// Mục có sẵn của mỗi nhóm = bộ mới (postopts.js) + vài mục của bản cũ (hiện ra để tick, không tick sẵn).
+const POST_PRESETS = Object.fromEntries(
+  self.XCSPostOpts.GROUPS.map((g) => [g.store, [...g.presets, ...(OLD_PRESETS[g.store] || []).filter((v) => !g.presets.includes(v))]])
+);
+// Vẽ các danh sách tick theo postopts.js.
+document.getElementById("postGroups").innerHTML = self.XCSPostOpts.GROUPS.map(
+  (g) => `<label>${g.label}<small>${g.multi ? "Trên X chọn được nhiều cái. " : ""}Không chọn: ${g.none.replace(/^.*?= /, "")}.</small></label><div class="checklist" id="${g.store}"></div>`
+).join("");
 const lines = (v) => [...new Set(String(v || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))];
 
 function renderChecklist(box, all, checked) {
@@ -134,7 +130,8 @@ chrome.storage.local.get({ ...DEFAULTS, groqModelList: [], ollamaModelList: [], 
     if (el && el.classList.contains("checklist")) {
       const checked = lines(s[k]);
       // Lần đầu: mục có sẵn + mục đã tick trước đây (từ bản cũ gõ tay).
-      const pool = s.postPool[k] || [...POST_PRESETS[k], ...checked.filter((v) => !POST_PRESETS[k].includes(v))];
+      const base = s.postPool[k] || POST_PRESETS[k];
+      const pool = [...base, ...checked.filter((v) => !base.includes(v))];
       return renderChecklist(el, pool, checked);
     }
     if (k === "groqModel") return fillGroqSelect(s.groqModelList, s.groqModel);

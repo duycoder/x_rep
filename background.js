@@ -389,13 +389,56 @@ function nowContext(d = new Date()) {
   return `${thu}, ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}, ${hm} (${buoi})`;
 }
 
-function buildPostPrompt({ persona, style, topic, place, when, extraHint, settings }) {
-  const styleName = String(style || "").trim();
+// Độ dài, mục tiêu, CTA... (nhóm "Thêm tuỳ chọn" trên bảng) → chỉ dẫn cụ thể cho AI.
+const POST_LENGTH = {
+  "một câu": "MỘT câu duy nhất, gọn, đắt.",
+  "ngắn (2–3 câu)": "2–3 câu ngắn, dưới 200 ký tự.",
+  "vừa (4–6 câu)": "4–6 câu, dưới 280 ký tự.",
+  "chuyện dài": "một câu chuyện dài 5–10 câu, xuống dòng cho dễ đọc (bài dài hơn 280 ký tự cần tài khoản X Premium)."
+};
+const POST_CTA = {
+  "không kêu gọi": "KHÔNG kết bằng câu hỏi hay lời kêu gọi nào. Để bài tự khiến người ta muốn trả lời.",
+  "hỏi ý kiến": "Kết bằng một câu hỏi xin ý kiến người đọc, tự nhiên, cụ thể.",
+  "mời kể chuyện riêng": "Kết bằng lời mời người đọc kể trải nghiệm của chính họ.",
+  "chọn A hay B": "Kết bằng câu hỏi cho chọn A hay B (hai lựa chọn cụ thể).",
+  "tag một người bạn": "Kết bằng lời rủ tag một người bạn hợp với bài (nhẹ nhàng, không ép).",
+  "đồng ý hay không?": "Kết bằng câu hỏi người đọc đồng ý hay không."
+};
+const POST_LANG = {
+  "tiếng Việt": "Viết bằng tiếng Việt.",
+  "tiếng Anh": "Write in natural, casual English.",
+  "song ngữ Việt – Anh": "Viết song ngữ: tiếng Việt trước, rồi bản tiếng Anh ngắn ở dòng dưới (cả bài vẫn gọn)."
+};
+const POST_IMAGE_EN = {
+  "minh hoạ điện ảnh": "cinematic illustration",
+  anime: "anime style illustration",
+  "hoạt hình 3D": "3D cartoon render",
+  "ảnh chụp chân thực": "realistic photography",
+  meme: "meme style image",
+  "tranh tối giản": "minimalist artwork"
+};
+const joinSel = (v) => [].concat(v || []).map((x) => String(x).trim()).filter(Boolean).join(", ");
+
+function buildPostPrompt(args) {
+  const { style, extraHint, settings } = args;
+  const persona = joinSel(args.persona);
+  const topic = joinSel(args.topic);
+  const place = joinSel(args.place);
+  const when = joinSel(args.when);
+  const mood = joinSel(args.mood);
+  const tone = joinSel(args.tone);
+  const goal = joinSel(args.goal);
+  const hook = joinSel(args.hook);
+  const strategy = joinSel(args.strategy);
+  const cta = joinSel(args.cta);
+  const length = joinSel(args.length);
+  const langSel = joinSel(args.lang);
+  const image = joinSel(args.image);
+  const styleName = joinSel(style);
   const styleRule = styleName
     ? `KIỂU BÀI: "${styleName}". ${POST_STYLES[styleName] || "Viết đúng kiểu này."} Cả ${settings.count} bài đều theo kiểu này, khác nhau về ý và góc nhìn, không bài nào mở đầu giống bài khác.`
-    : `Viết đúng ${settings.count} bài, mỗi bài một kiểu khác nhau, chọn trong: life quote; suy ngẫm/triết lý; lời khuyên từ trải nghiệm; câu hỏi tương tác dễ trả lời; kể một khoảnh khắc nhỏ có cái kết; đùa nhẹ. Không bài nào mở đầu giống bài khác.`;
-  const lang =
-    settings.language === "en" ? "Write in English." : "Viết bằng tiếng Việt (trừ khi chủ đề hoặc yêu cầu thêm bảo viết tiếng Anh).";
+    : `Viết đúng ${settings.count} bài, mỗi bài một kiểu khác nhau, chọn trong: life quote; triết lý; lời khuyên từ trải nghiệm; câu hỏi tương tác; kể chuyện ngắn; hài hước; quan điểm (hot take); danh sách 3 điều. Không bài nào mở đầu giống bài khác.`;
+  const lang = POST_LANG[langSel] || (settings.language === "en" ? "Write in English." : "Viết bằng tiếng Việt (trừ khi yêu cầu thêm bảo viết tiếng Anh).");
   const p = settings.profile;
   const pct = (x) => `${Math.round(x * 100)}%`;
   // Thói quen gõ học từ bình luận của bạn. Bỏ quy tắc độ dài vì bài đăng dài hơn bình luận.
@@ -409,52 +452,72 @@ function buildPostPrompt({ persona, style, topic, place, when, extraHint, settin
         p.noAccent > 0.5 ? "- Hay gõ tiếng Việt KHÔNG DẤU." : "",
         p.fillers.length ? `- Từ đệm hay dùng: ${p.fillers.join(", ")} (dùng khi hợp, đừng nhồi).` : "",
         "Vài câu thật của họ:",
-        ...(settings.samples || []).slice(0, 10).map((s) => `• ${s}`)
+        ...(settings.samples || []).slice(0, 10).map((x) => `• ${x}`)
       ]
     : [];
-  const past = (settings.pastPosts || []).slice(-5);
+  const past = (settings.pastPosts || []).slice(-8);
+  const longPost = length === "chuyện dài";
+  const noImage = image === "không ảnh";
   const system = [
-    "Bạn giúp một người dùng X (Twitter) viết BÀI ĐĂNG MỚI của chính họ (không phải bình luận). Họ sẽ tự đọc, sửa và tự bấm đăng.",
+    "Bạn là bộ gợi ý bài đăng X (Twitter) cho một người dùng. Bạn viết BÀI ĐĂNG MỚI của chính họ (không phải bình luận). Họ sẽ tự đọc, sửa và tự bấm đăng.",
     "",
-    "MỤC TIÊU: bài chỉ có chữ nhưng khiến người đọc muốn thả tim, trả lời hoặc lưu lại. Dòng đầu phải bắt mắt (người lướt nhanh vẫn dừng lại), nói đúng điều nhiều người thấy mình trong đó. Được hỏi người đọc, nhưng không xin like/follow/share.",
+    "QUY TẮC CHUNG:",
+    "1. Dùng ngày, giờ hiện tại để hiểu bối cảnh (sáng thì không chúc ngủ ngon, thứ Hai khác tối thứ Bảy, khuya khác giờ tan làm).",
+    "2. Kết hợp các lựa chọn bên dưới một cách TỰ NHIÊN, không nhồi cho đủ. Lựa chọn nào trống thì tự quyết theo ngữ cảnh hiện tại (giờ, ngày, con người).",
+    "3. KHÔNG viết câu động lực chung chung (\"hãy luôn cố gắng\", \"cuộc sống là...\", \"tràn đầy năng lượng\").",
+    "4. Ưu tiên trải nghiệm người thật, đời thường, có chi tiết cụ thể (tên món, góc phố, con số nhỏ) để người đọc thấy mình trong đó. Câu dán được cho bất kỳ ai ở bất kỳ đâu là câu hỏng.",
+    "5. Câu mở đầu phải khiến người lướt nhanh dừng lại.",
+    "6. Móc kéo tương tác phải tự nhiên, không gượng, không xin like/follow/share.",
+    "7. Ít emoji: tối đa 1 mỗi bài, nhiều bài không cần.",
+    "8. Không lặp lại các bài đã đăng hay các ý quá quen.",
+    "9. Không có lựa chọn nào thì tự gợi ý thông minh theo ngữ cảnh hiện tại.",
+    "10. Viết như người đang trò chuyện trên X, KHÔNG giống quảng cáo hay bài PR.",
     "",
-    "DỮ LIỆU ĐẦU VÀO: con người họ (họ là ai), kiểu bài, chủ đề, địa điểm, thời điểm/dịp. Con người và chủ đề luôn phải khớp. Địa điểm và thời điểm: kể chuyện, đùa, hỏi đời thường thì nên dùng; life quote, triết lý, lời khuyên thì chỉ dùng khi tự nhiên, không cần nhắc.",
-    "- Con người: viết đúng vai, góc nhìn, nghề, sở thích, cách xưng hô của họ. Không bịa thêm thông tin cá nhân quan trọng (nghề, gia đình, thu nhập) mà họ không cho.",
-    "- Thời điểm: hợp với giờ và ngày (sáng thì không chúc ngủ ngon, thứ Hai khác cuối tuần). Nếu ngày gần một dịp lễ quen thuộc ở nơi họ sống và hợp chủ đề thì có thể nhắc, không thì thôi.",
-    "- Địa điểm: dùng chi tiết đời thường hợp với nơi đó (món ăn, đường phố, nhịp sống, khí hậu theo mùa). KHÔNG bịa tin tức, sự kiện, số liệu, thời tiết cụ thể của hôm nay.",
-    "- Chủ đề: bám vào đó. Chủ đề trống thì tự chọn chuyện đời thường hợp với con người + thời điểm + địa điểm.",
+    "ĐÚNG VAI: viết đúng con người được chọn (tuổi, nghề, gia đình, tính cách, cách xưng hô). Không bịa thêm thông tin cá nhân quan trọng (nghề, gia đình, thu nhập) không có trong \"Con người tôi\". Địa điểm: dùng chi tiết đời thường của nơi đó, KHÔNG bịa tin tức, sự kiện, số liệu, thời tiết cụ thể của hôm nay (trừ khi thời điểm được chọn là \"ngày mưa\").",
     "",
     styleRule,
     "",
     "CÁCH VIẾT:",
-    "- Mỗi bài DƯỚI 270 ký tự (giới hạn của X). Độ dài khác nhau: có bài 1 câu, có bài 2–4 câu.",
-    "- Bài đăng CHỈ CÓ CHỮ, không kèm ảnh/video: KHÔNG viết như đang chỉ vào ảnh (\"cái này\", \"nhìn nè\", \"view này\", \"món này\", \"áo này\"), không giả vờ đang xem video/ảnh của ai. Người đọc chỉ thấy chữ, nên mọi thứ phải nói rõ bằng chữ (\"tô cơm tấm sườn bì chả ở đầu hẻm\" chứ không phải \"món này\").",
-    "- Nghe như người thật tự gõ trên điện thoại, có chi tiết cụ thể (tên món, góc phố, con số nhỏ đời thường). Câu dán được cho bất kỳ ai ở bất kỳ đâu là câu hỏng.",
-    "- Tránh sáo rỗng: \"Chào buổi sáng cả nhà\", \"Chúc mọi người một ngày tốt lành\", \"tràn đầy năng lượng\", \"Cuộc sống là...\", \"Hãy luôn...\".",
-    "- Không tag @tài khoản nào. Không hashtag (trừ khi yêu cầu thêm bảo có), không link, không xin like/follow/share, không quảng cáo.",
-    "- Tối đa 1–2 emoji mỗi bài, nhiều bài không cần emoji.",
-    "- Không viết về chính trị, tôn giáo, chuyện gây thù ghét. Không nói xấu người hay thương hiệu cụ thể.",
+    longPost ? `- Độ dài: ${POST_LENGTH[length]}` : `- Mỗi bài DƯỚI 270 ký tự (giới hạn của X). Độ dài: ${POST_LENGTH[length] || "ngắn hoặc vừa (1–4 câu), các bài dài ngắn khác nhau."}`,
+    `- Giọng: ${tone || "chân thật, kiểu trò chuyện"}${settings.tone ? ` (giọng chung của người dùng: ${settings.tone})` : ""}.`,
+    mood ? `- Tâm trạng của người viết: ${mood}. Để tâm trạng thấm vào câu chữ, không cần nói thẳng ra.` : "- Tâm trạng: tự chọn cho hợp giờ giấc và hoàn cảnh.",
+    `- Mục tiêu: ${goal || "tăng lượt trả lời"}.`,
+    hook ? `- Câu mở đầu theo kiểu: ${hook}.` : "- Câu mở đầu: chọn kiểu hợp ngữ cảnh (câu hỏi, thú nhận, câu bất ngờ, tình huống ai cũng gặp...), mỗi bài một kiểu.",
+    strategy ? `- Cách kéo tương tác: ${strategy}.` : "",
+    `- Kết bài: ${POST_CTA[cta] || "nếu hợp thì kết bằng một câu hỏi tự nhiên, dễ trả lời (không hỏi chung chung \"mọi người nghĩ sao\")."}`,
+    "- Bài đăng có thể chỉ có chữ: KHÔNG viết như đang chỉ vào ảnh (\"cái này\", \"nhìn nè\", \"view này\"), mọi thứ phải nói rõ bằng chữ.",
+    "- Không tag @tài khoản nào. Không hashtag (trừ khi yêu cầu thêm bảo có), không link.",
+    "- Không viết về chính trị, tôn giáo, chuyện gây thù ghét. Không nói xấu người hay thương hiệu cụ thể. Ý kiến gây tranh cãi chỉ ở mức chuyện đời thường.",
     lang,
-    `Giọng văn: ${settings.tone}.`,
     ...habit,
     past.length ? "\nBÀI NGƯỜI DÙNG ĐÃ ĐĂNG TRƯỚC ĐÂY (bắt giọng, KHÔNG lặp lại ý):\n" + past.map((x) => `• ${x.text.replace(/\s+/g, " ")}`).join("\n") : "",
     "",
-    'Chỉ trả về JSON đúng dạng {"context": "...", "suggestions": ["...", "..."]}, không thêm chữ nào khác.',
-    'Trong đó "context" là MỘT câu ngắn tiếng Việt nói góc viết bạn chọn, ví dụ: "Chiều thứ Ba ở Sài Gòn, dân văn phòng thèm ăn vặt, viết kiểu kể chuyện + hỏi follower".',
-    'Thêm trường "images": mảng cùng độ dài với "suggestions", mỗi phần tử là ẢNH MINH HOẠ cho bài tương ứng, viết bằng TIẾNG ANH theo dạng "từ khoá | mô tả": từ khoá là 2–3 từ tên vật/cảnh chính để tìm ảnh (danh từ, không có a/the), mô tả 8–15 từ là một cảnh cụ thể có không khí, không có chữ trong ảnh, không có người nổi tiếng.',
-    'Ví dụ: "iced coffee | iced milk coffee on a wooden table, rainy Saigon street outside, warm light", "office desk night | messy office desk at night with laptop glow and cold coffee".',
-    "Bài vẫn phải tự đứng được khi không có ảnh (ảnh chỉ là minh hoạ)."
+    'Chỉ trả về JSON đúng dạng {"context": "...", "suggestions": ["...", "..."], "images": ["...", "..."]}, không thêm chữ nào khác.',
+    'Trong đó "context" là MỘT câu ngắn tiếng Việt nói góc viết bạn chọn, ví dụ: "10 giờ tối thứ Sáu ở Hà Nội, dân văn phòng mệt nhưng chưa muốn ngủ, mở bằng lời thú nhận + hỏi A/B".',
+    noImage
+      ? '"images": mảng cùng độ dài với "suggestions", mỗi phần tử là chuỗi rỗng "" (người dùng không cần ảnh).'
+      : `"images": mảng cùng độ dài với "suggestions", mỗi phần tử là ẢNH MINH HOẠ cho bài tương ứng, viết bằng TIẾNG ANH theo dạng "từ khoá | mô tả": từ khoá là 2–3 từ tên vật/cảnh chính để tìm ảnh, mô tả 8–15 từ là một cảnh cụ thể có không khí${POST_IMAGE_EN[image] ? `, phong cách ${POST_IMAGE_EN[image]}` : ""}, không có chữ trong ảnh, không có người nổi tiếng.`,
+    noImage ? "" : 'Ví dụ: "iced coffee | iced milk coffee on a wooden balcony table, rainy Hanoi street below, warm evening light".'
   ]
     .filter((x) => x !== "")
     .join("\n");
   const user = [
-    // Con người chọn trên bảng; không chọn thì lấy ô "Bạn là ai?" trong Cài đặt.
-    `Con người tôi: ${String(persona || settings.persona || "").trim() || "(không nói, viết như một người bình thường)"}`,
-    `Kiểu bài: ${styleName || "(trộn nhiều kiểu)"}`,
-    `Chủ đề: ${String(topic || "").trim() || "(để bạn chọn)"}`,
-    `Địa điểm: ${String(place || "").trim() || "(không nói, đừng nhắc địa điểm cụ thể)"}`,
     `Thời điểm hiện tại: ${nowContext()}`,
-    when && String(when).trim() ? `Thời điểm/dịp muốn viết: ${String(when).trim()}` : "",
+    // Con người chọn trên bảng; không chọn thì lấy ô "Bạn là ai?" trong Cài đặt.
+    `Con người tôi: ${persona || String(settings.persona || "").trim() || "(không chọn: viết như một người bình thường, hợp ngữ cảnh)"}`,
+    `Kiểu bài: ${styleName || "(trộn nhiều kiểu)"}`,
+    `Chủ đề: ${topic || "(để bạn chọn theo ngữ cảnh)"}`,
+    `Địa điểm: ${place || "(không chọn: đừng nhắc địa điểm cụ thể)"}`,
+    when ? `Thời điểm / hoàn cảnh muốn viết: ${when}` : "",
+    mood ? `Tâm trạng: ${mood}` : "",
+    tone ? `Giọng viết: ${tone}` : "",
+    goal ? `Mục tiêu: ${goal}` : "",
+    hook ? `Câu mở đầu: ${hook}` : "",
+    strategy ? `Cách kéo tương tác: ${strategy}` : "",
+    cta ? `Kết bài (CTA): ${cta}` : "",
+    length ? `Độ dài: ${length}` : "",
+    langSel ? `Ngôn ngữ: ${langSel}` : "",
+    image ? `Kiểu ảnh: ${image}` : "",
     extraHint ? `Yêu cầu thêm: ${extraHint}` : ""
   ]
     .filter(Boolean)
@@ -724,7 +787,7 @@ async function callGroq(payload, settings) {
     ],
     temperature: 1,
     // Groq tính giới hạn token/phút gồm cả phần dành sẵn cho câu trả lời, nên để vừa đủ.
-    max_tokens: payload.mode === "raw" ? payload.maxTokens || 2000 : payload.mode === "post" ? 1800 : 1024 // bài đăng + mô tả ảnh dài hơn bình luận
+    max_tokens: payload.mode === "raw" ? payload.maxTokens || 2000 : payload.mode === "post" ? (payload.length === "chuyện dài" ? 3200 : 1800) : 1024 // bài đăng + mô tả ảnh dài hơn bình luận
   };
   // Tắt / giảm phần "suy nghĩ" của model có suy nghĩ: đỡ tốn token và nhanh hơn.
   if (/qwen3/i.test(model)) req.reasoning_effort = "none";
@@ -885,7 +948,7 @@ async function callOllama(payload, settings) {
                 num_ctx: Math.min(16384, Math.max(4096, Math.ceil(((payload.system || "").length + (payload.user || "").length) / 2.5) + (payload.maxTokens || 1500) + 512))
               }
             : payload.mode === "post"
-            ? { ...OLLAMA_OPTS, num_predict: 1000 } // bài đăng dài hơn bình luận
+            ? { ...OLLAMA_OPTS, num_predict: payload.length === "chuyện dài" ? 2400 : 1000, num_ctx: 8192 } // bài đăng dài hơn bình luận
             : OLLAMA_OPTS
       })
     });

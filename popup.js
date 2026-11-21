@@ -64,3 +64,15 @@ chrome.storage.local.get({ cooldowns: {} }, ({ cooldowns }) => {
     document.getElementById("st").after(el);
   }
 });
+
+// Bảng số bài đăng / trả lời theo ngày giờ Việt Nam (content.js đếm mỗi lần bạn bấm Đăng/Trả lời trên X).
+const vnDay = (ts = Date.now()) => new Date(ts + 7 * 3600e3).toISOString().slice(0, 10);
+chrome.storage.local.get({ activity: {} }, ({ activity }) => {
+  const day = (i) => activity[vnDay(Date.now() - i * 86400e3)] || {};
+  const sum = (k) => Array.from({ length: 7 }, (_, i) => day(i)[k] || 0).reduce((a, b) => a + b, 0);
+  const row = (label, f, w) => `<tr><td>${label}</td><td class="today">${f(day(0))}</td><td>${f(day(1))}</td><td>${w}</td></tr>`;
+  document.getElementById("stats").innerHTML = `<table><tr><th>Giờ VN</th><th>Hôm nay</th><th>Hôm qua</th><th>7 ngày</th></tr>
+    ${row("📝 Bài đăng", (d) => d.post || 0, sum("post"))}
+    ${row("💬 Trả lời", (d) => d.reply || 0, sum("reply"))}
+    ${row("🤖 Dùng gợi ý", (d) => (d.post_ai || 0) + (d.reply_ai || 0), sum("post_ai") + sum("reply_ai"))}</table>`;
+});

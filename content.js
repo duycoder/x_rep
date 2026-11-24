@@ -32,12 +32,89 @@
         // link lạ thì bỏ qua
       }
     });
+    const id = tweetIdOf(article);
     return {
       text: textEl ? textEl.innerText : "",
       author: nameEl ? nameEl.innerText.split("\n").slice(0, 2).join(" ") : "",
       hasMedia,
-      images: images.slice(0, 4)
+      images: images.slice(0, 4),
+      id,
+      ...ownCtx(id, article)
     };
+  }
+
+  // ---------- Bình luận dưới bài của chính bạn ----------
+  // xhook.js gửi sang các bài X vừa tải: id -> { text, replyTo (id bài cha), user (tên @ người đăng) }.
+  const tweetMap = new Map();
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== window || !m || m.source !== "xcs-hook" || m.type !== "tweets" || !Array.isArray(m.items)) return;
+    for (const t of m.items) {
+      if (!t || !t.id) continue;
+      const old = tweetMap.get(t.id);
+      tweetMap.delete(t.id);
+      tweetMap.set(t.id, { ...old, ...t, text: t.text || (old && old.text) || "" });
+    }
+    while (tweetMap.size > 5000) tweetMap.delete(tweetMap.keys().next().value);
+  });
+  // Tên @ của bạn: đọc từ thanh bên của X (nhiều chỗ, vì X hay đổi giao diện), nhớ lại để lần sau khỏi tìm.
+  let myHandleCache = "";
+  try {
+    chrome.storage.local.get({ myHandle: "" }, (r) => (myHandleCache = myHandleCache || r.myHandle || ""));
+  } catch (_) {
+    // extension vừa tải lại
+  }
+  function myHandle() {
+    let h = "";
+    const a = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');
+    if (a) h = (a.getAttribute("href") || "").replace(/^\//, "");
+    if (!h) {
+      const av = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"] [data-testid^="UserAvatar-Container-"]');
+      if (av) h = av.getAttribute("data-testid").replace("UserAvatar-Container-", "");
+    }
+    if (!h) {
+      const sw = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+      h = ((sw && sw.innerText.match(/@(\w{1,15})/)) || [])[1] || "";
+    }
+    h = h.toLowerCase();
+    if (h && h !== myHandleCache) {
+      myHandleCache = h;
+      try {
+        chrome.storage.local.set({ myHandle: h });
+      } catch (_) {
+        // extension vừa tải lại
+      }
+    }
+    return h || myHandleCache;
+  }
+  function tweetIdOf(article) {
+    const a = article && article.querySelector('a[href*="/status/"] time')?.closest("a");
+    return (a && (a.getAttribute("href").match(/\/status\/(\d+)/) || [])[1]) || "";
+  }
+  // Bài (id) này có phải bình luận dưới bài của bạn không, và bài của bạn viết gì.
+  function ownCtx(id, article) {
+    const me = myHandle();
+    if (!me) return { onMyPost: false, myPost: "", myPostId: "" };
+    const t = id && tweetMap.get(id);
+    if (t && (t.user || "").toLowerCase() === me) return { onMyPost: false, myPost: "", myPostId: "" }; // bài của chính bạn
+    const parent = t && t.replyTo ? tweetMap.get(t.replyTo) : null;
+    if (parent) {
+      const mine = (parent.user || "").toLowerCase() === me;
+      return { onMyPost: mine, myPost: mine ? parent.text || "" : "", myPostId: mine ? parent.id : "" };
+    }
+    // Chưa có dữ liệu bài cha: dòng "Đang trả lời @bạn" trong bài.
+    let mine = false;
+    if (article) {
+      const authorLink = article.querySelector('[data-testid="User-Name"] a[href^="/"]');
+      const author = ((authorLink && authorLink.getAttribute("href")) || "").replace(/^\//, "").toLowerCase();
+      const text = article.querySelector('[data-testid="tweetText"]');
+      mine =
+        author !== me &&
+        [...article.querySelectorAll(`a[href]`)].some(
+          (a) => a.getAttribute("href").toLowerCase() === `/${me}` && !(text && text.contains(a)) && !a.closest('[data-testid="User-Name"]')
+        );
+    }
+    return { onMyPost: mine, myPost: "", myPostId: (mine && t && t.replyTo) || "" };
   }
 
   // ---------- Nút trong thanh hành động ----------
@@ -116,7 +193,7 @@
       .x { border: 0; background: transparent; font-size: 18px; cursor: pointer; color: inherit; }
       .body { padding: 0 14px 14px; }
       .preview { font-size: 12px; opacity: .8; background: #f7f9f9; border-radius: 10px; padding: 8px; margin-bottom: 10px;
-        max-height: 70px; overflow: hidden; white-space: pre-wrap; }
+        max-height: 45vh; overflow-y: auto; white-space: pre-wrap; } /* hiện đủ bài, bài rất dài thì cuộn trong khung */
       .note { font-size: 12px; color: #b45309; margin: 6px 0; }
       .src { font-size: 11px; opacity: .65; margin-bottom: 6px; }
       .item { margin-bottom: 10px; }
@@ -137,7 +214,10 @@
       .foot { font-size: 11px; opacity: .65; margin-top: 8px; }
       .foot a { color: #1d9bf0; cursor: pointer; }
       .postform { display: none; margin-bottom: 4px; }
+      .panel.post { width: 680px; max-height: 90vh; } /* bảng bài đăng nhiều nhóm lựa chọn: rộng hơn để chip xếp gọn */
       .panel.post .postform { display: block; }
+      .panel:not(.post) .cpjson, .panel:not(.post) .pjson { display: none; } /* chỉ bảng Gợi ý bài đăng */
+      .pjson { width: 100%; box-sizing: border-box; height: 160px; margin: 6px 0; font: 11px/1.4 Consolas, monospace; border-radius: 8px; padding: 6px; }
       .panel.post .preview { display: none; }
       .postform label { display: block; font-size: 12px; font-weight: 600; margin: 6px 0 3px; }
       .postform .opt-none { font-weight: 400; opacity: .6; font-size: 11px; margin-left: 4px; }
@@ -154,6 +234,10 @@
       .chips input.addin { flex: 1 1 140px; min-width: 120px; border: 1px solid #1d9bf0; border-radius: 999px; padding: 4px 10px;
         font: 13px/1.25 inherit; background: transparent; color: inherit; outline: none; }
       .postform .now { font-size: 11px; opacity: .65; margin-top: 2px; }
+      .pmode { margin-bottom: 6px; }
+      .fbnote { display: none; font-size: 12px; opacity: .8; margin: 4px 0 6px; }
+      .panel.fbmode .fbnote { display: block; }
+      .panel.fbmode .pgroups { display: none; }
       .moreopts { margin-top: 8px; border-top: 1px dashed rgba(127,127,127,.4); padding-top: 6px; }
       .moreopts summary { cursor: pointer; font-size: 12px; font-weight: 600; color: #1d9bf0; list-style: none; }
       .moreopts summary::-webkit-details-marker { display: none; }
@@ -205,14 +289,23 @@
       <div class="body">
         <div class="preview"></div>
         <div class="postform">
+          <div class="pmode chips">
+            <button type="button" class="chip pm" data-m="opts" title="Viết theo con người, chủ đề, giọng... bạn chọn bên dưới">🎛 Theo lựa chọn</button>
+            <button type="button" class="chip pm" data-m="fb" title="Chỉ học từ bài page Facebook đã lưu, bỏ qua mọi lựa chọn">📘 Phong cách page Facebook</button>
+          </div>
+          <div class="fbnote"></div>
+          <div class="pgroups">
           ${groupsHtml(POST_GROUPS.filter((g) => !g.more))}
           <details class="moreopts"><summary>⚙ Thêm tuỳ chọn <span class="morecnt"></span></summary>${groupsHtml(POST_GROUPS.filter((g) => g.more))}</details>
+          </div>
           <div class="now"></div>
         </div>
         <div class="hint">
           <input placeholder="Thêm ý (vd: hỏi về giá, giọng hài hơn)..." />
           <button class="act ghost regen">Tạo lại</button>
+          <button class="act ghost cpjson" title="Sao chép toàn bộ prompt (quy tắc + lựa chọn + bài) dạng JSON để dán sang AI khác">📋 Prompt JSON</button>
         </div>
+        <textarea class="pjson" readonly hidden></textarea>
         <div class="content"></div>
         <div class="foot">Bạn tự đọc lại, tự bấm Trả lời và Thích trên X. · <a class="opt">Cài đặt</a></div>
       </div>
@@ -304,16 +397,83 @@
   });
   // Đếm theo lệnh đăng bài thật của X (xhook.js nghe CreateTweet, chỉ báo khi đăng thành công).
   // Cú bấm nút chỉ dùng để biết lần đăng đó có lấy câu gợi ý của extension không.
-  let aiHint = null;
+  // sendCtx: lúc bấm đăng, câu gợi ý đang chờ (nếu có) để biết lần đăng này có dùng gợi ý không.
+  let sendCtx = null;
   function trackSend() {
-    aiHint = pending && Date.now() - pending.at < 30 * 60e3 ? { kind: pending.kind === "post" ? "post" : "reply", at: Date.now() } : null;
+    sendCtx = pending && Date.now() - pending.at < 30 * 60e3 ? { ...pending, at: Date.now() } : null;
+    pending = null;
+  }
+  // Bài bạn vừa bấm nút trả lời (để lưu cặp "bài → câu trả lời" cả khi bạn tự gõ, không dùng gợi ý).
+  let replyTarget = null;
+  const statusId = (article) => {
+    const a = article.querySelector('a[href*="/status/"] time')?.closest("a");
+    return (a && (a.getAttribute("href").match(/\/status\/(\d+)/) || [])[1]) || "";
+  };
+  document.addEventListener(
+    "click",
+    (e) => {
+      const art = e.target.closest && e.target.closest('[data-testid="reply"]')?.closest("article");
+      if (art) replyTarget = { ...getTweetInfo(art), id: statusId(art), at: Date.now() };
+    },
+    true
+  );
+  function findTweet(id) {
+    if (id && replyTarget && replyTarget.id === id) return replyTarget;
+    if (id) {
+      for (const a of document.querySelectorAll(`a[href*="/status/${id}"]`)) {
+        const art = a.closest("article");
+        if (art && statusId(art) === id) return getTweetInfo(art);
+      }
+    }
+    // Trang chi tiết bài: ô trả lời nằm ngay dưới bài chính.
+    if (id && location.pathname.includes(`/status/${id}`)) {
+      const art = document.querySelector('article[tabindex="-1"]') || document.querySelector("article");
+      if (art) return getTweetInfo(art);
+    }
+    return { text: "", author: "" };
+  }
+  // Lưu lại mọi bài đăng / câu trả lời bạn đăng thành công (để học giọng và huấn luyện model riêng).
+  function saveSent(kind, m, ctx) {
+    const text = String(m.text || "").trim();
+    if (!text) return;
+    if (kind === "post") {
+      chrome.runtime.sendMessage({ type: "xcs-save-post", topic: (ctx && ctx.topic) || "", text, suggested: (ctx && ctx.suggested) || "", id: m.id || "", myImages: m.media || [] });
+      if (ctx && ctx.studioId) chrome.runtime.sendMessage({ type: "studio-published", postId: ctx.studioId });
+      return;
+    }
+    const src = ctx && ctx.post != null ? { text: ctx.post, author: ctx.author, images: ctx.images, onMyPost: ctx.onMyPost, myPost: ctx.myPost, myPostId: ctx.myPostId } : findTweet(m.replyTo);
+    // Biết chắc bài cha (đã tải về) thì theo dữ liệu đó, không thì theo lúc bấm trả lời.
+    const cmt = m.replyTo && tweetMap.get(m.replyTo);
+    const known = !!(cmt && cmt.replyTo && tweetMap.get(cmt.replyTo));
+    const own = known ? ownCtx(m.replyTo) : {};
+    const onMyPost = known ? own.onMyPost : !!src.onMyPost;
+    chrome.runtime.sendMessage({
+      onMyPost,
+      myPost: onMyPost ? own.myPost || src.myPost || "" : "",
+      myPostId: onMyPost ? own.myPostId || src.myPostId || "" : "",
+      type: "xcs-save-example",
+      post: String(src.text || "").slice(0, 600),
+      author: src.author || "",
+      reply: text.replace(/\s+/g, " "),
+      suggested: (ctx && ctx.suggested) || "",
+      replyTo: m.replyTo || "",
+      images: src.images || [],
+      id: m.id || "",
+      myImages: m.media || []
+    });
   }
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (e.source !== window || !m || m.source !== "xcs-hook" || m.type !== "tweet-created") return;
     const kind = m.kind === "reply" ? "reply" : "post";
-    const ai = !!aiHint && aiHint.kind === kind && Date.now() - aiHint.at < 60e3;
-    if (ai) aiHint = null;
+    const ctx = sendCtx && (sendCtx.kind === "post" ? "post" : "reply") === kind && Date.now() - sendCtx.at < 60e3 ? sendCtx : null;
+    if (ctx) sendCtx = null;
+    const ai = !!ctx;
+    try {
+      saveSent(kind, m, ctx);
+    } catch (_) {
+      // extension vừa tải lại
+    }
     try {
       chrome.storage.local.get({ activity: {} }, ({ activity }) => {
         const d = vnDay();
@@ -344,6 +504,36 @@
   const regen = () => currentArticle && (isPostMode() ? loadPosts() : loadSuggestions(currentArticle));
   shadow.querySelector(".x").addEventListener("click", closePanel);
   regenBtn.addEventListener("click", regen);
+  // 📋 Prompt JSON: cùng prompt extension gửi cho AI, để dán sang ChatGPT / Gemini / AI khác.
+  const pjsonBox = shadow.querySelector(".pjson");
+  shadow.querySelector(".cpjson").addEventListener("click", () => {
+    if (!currentArticle) return;
+    const msg = isPostMode()
+      ? fbStyle
+        ? { type: "xcs-build-prompt", mode: "post", fbStyle: true, text: "", extraHint: hintInput.value.trim() }
+        : { type: "xcs-build-prompt", mode: "post", ...postSel, text: postSel.topic, extraHint: hintInput.value.trim() }
+      : { type: "xcs-build-prompt", ...getTweetInfo(currentArticle), extraHint: hintInput.value.trim() };
+    try {
+      chrome.runtime.sendMessage(msg, async (res) => {
+        if (!res || res.error) return toast(`Không tạo được prompt: ${(res && res.error) || "lỗi"}`);
+        const text = JSON.stringify(res.prompt, null, 2);
+        pjsonBox.value = text;
+        try {
+          await navigator.clipboard.writeText(text);
+          pjsonBox.hidden = true;
+          toast("Đã sao chép prompt JSON, dán vào AI khác là dùng được");
+        } catch (_) {
+          // trình duyệt không cho chép: hiện ra để bạn tự chép
+          pjsonBox.hidden = false;
+          pjsonBox.focus();
+          pjsonBox.select();
+          toast("Bấm Ctrl+C để chép prompt JSON");
+        }
+      });
+    } catch (_) {
+      toast("Extension vừa được tải lại, bấm F5 trang X");
+    }
+  });
   hintInput.addEventListener("keydown", (e) => {
     e.stopPropagation();
     if (e.key === "Enter") regen();
@@ -380,6 +570,26 @@
     const d = new Date();
     return `Bây giờ: ${d.toLocaleDateString("vi-VN", { weekday: "long", day: "numeric", month: "numeric" })}, ${d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}`;
   }
+  // Chế độ "Phong cách page Facebook": tách hẳn khỏi các lựa chọn của bảng, chỉ học từ bài page đã lưu.
+  let fbStyle = false;
+  function setFbStyle(on) {
+    fbStyle = !!on;
+    panel.classList.toggle("fbmode", fbStyle);
+    shadow.querySelectorAll(".pm").forEach((b) => b.classList.toggle("on", (b.dataset.m === "fb") === fbStyle));
+    hintInput.placeholder = fbStyle
+      ? "Ý / chủ đề muốn viết (tuỳ chọn, vd: tiền bạc và tình bạn)..."
+      : "Thêm ý (vd: hài hơn, có 1 câu hỏi, viết tiếng Anh)...";
+    if (!fbStyle) return;
+    const note = shadow.querySelector(".fbnote");
+    note.textContent = "Đang đếm bài mẫu...";
+    chrome.runtime.sendMessage({ type: "fb-stats" }, (r) => {
+      if (chrome.runtime.lastError || !r) return (note.textContent = "");
+      const st = r.st || {};
+      note.textContent = r.total
+        ? `Chỉ học từ bài page Facebook đã lưu (${st.train || 0} bài đã duyệt, ${st.new || 0} chờ duyệt), bỏ qua mọi lựa chọn khác. Gõ ý vào ô bên dưới hoặc để trống cho AI tự chọn.`
+        : "Chưa lưu bài Facebook nào: mở page trên Facebook và lướt để lưu bài trước.";
+    });
+  }
   function openPostPanel(toolbar) {
     if (!chrome.runtime?.id) return toast("Extension vừa được cập nhật. Bấm F5 tải lại trang X.");
     postComposerHint = toolbar || null;
@@ -388,7 +598,7 @@
     hintInput.value = "";
     contentBox.innerHTML = '<div class="hint" style="display:block;opacity:.7">Bấm chọn rồi bấm <b>Tạo bài</b>.</div>';
     nowEl.textContent = nowLabel() + " (luôn gửi kèm cho AI)";
-    const want = { persona: "", postSel: null, postSpecV3: false, postMoreOpen: false };
+    const want = { persona: "", postSel: null, postSpecV3: false, postMoreOpen: false, postFbStyle: false };
     POST_GROUPS.forEach((g) => (want[g.store] = null));
     chrome.storage.local.get(want, (s) => {
       const lines = (v) => [...new Set(String(v || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean))];
@@ -425,6 +635,13 @@
       det.open = !!s.postMoreOpen;
       det.ontoggle = () => chrome.storage.local.set({ postMoreOpen: det.open });
       updateMoreCount();
+      shadow.querySelectorAll(".pm").forEach((b) => {
+        b.onclick = () => {
+          setFbStyle(b.dataset.m === "fb");
+          chrome.storage.local.set({ postFbStyle: fbStyle });
+        };
+      });
+      setFbStyle(s.postFbStyle);
       panel.classList.add("open");
     });
   }
@@ -513,7 +730,9 @@
     nowEl.textContent = nowLabel() + " (luôn gửi kèm cho AI)";
     startRequest(
       POST_KEY,
-      { type: "xcs-suggest", mode: "post", ...postSel, text: postSel.topic, extraHint: hintInput.value.trim() },
+      fbStyle
+        ? { type: "xcs-suggest", mode: "post", fbStyle: true, text: "", extraHint: hintInput.value.trim() }
+        : { type: "xcs-suggest", mode: "post", ...postSel, text: postSel.topic, extraHint: hintInput.value.trim() },
       "Đang viết bài"
     );
   }
@@ -521,12 +740,19 @@
   // Ô soạn bài mà nút "Gợi ý bài" nằm cạnh có phải ô trả lời không (không gắn nút vào ô trả lời).
   function isReplyToolbar(toolbar) {
     const dialog = toolbar.closest('[role="dialog"]');
-    if (dialog) return !!dialog.querySelector('article[data-testid="tweet"]');
+    if (dialog)
+      return (
+        !!dialog.querySelector('article[data-testid="tweet"]') ||
+        /reply|trả lời/i.test(dialog.querySelector(".public-DraftEditorPlaceholder-inner")?.textContent || "") ||
+        !!(replyTarget && Date.now() - replyTarget.at < 5000)
+      );
     return /\/status\//.test(location.pathname);
   }
   function injectPostButtons() {
     document.querySelectorAll('[data-testid="toolBar"]').forEach((tb) => {
-      if (tb.querySelector("[data-xcs-post]") || isReplyToolbar(tb)) return;
+      const old = tb.querySelector("[data-xcs-post]");
+      if (old && isReplyToolbar(tb)) old.remove(); // gắn nhầm vào ô trả lời lúc X chưa vẽ xong
+      if (old || isReplyToolbar(tb)) return;
       const b = document.createElement("button");
       b.setAttribute("data-xcs-post", "1");
       b.type = "button";
@@ -1047,24 +1273,10 @@
       return;
     }
     const info = getTweetInfo(article);
-    pending = { post: (info.text || "").slice(0, 600), author: info.author, suggested, at: Date.now() };
-  }
-  function savePosted() {
-    if (!pending || Date.now() - pending.at > 30 * 60 * 1000) return;
-    const composer = findComposer();
-    const target = composer && (composer.querySelector('[contenteditable="true"]') || composer);
-    const raw = target ? target.innerText.trim() : "";
-    if (!raw) return;
-    try {
-      if (pending.kind === "post") {
-        chrome.runtime.sendMessage({ type: "xcs-save-post", topic: pending.topic, text: raw });
-        if (pending.studioId) chrome.runtime.sendMessage({ type: "studio-published", postId: pending.studioId });
-      }
-      else chrome.runtime.sendMessage({ type: "xcs-save-example", ...pending, reply: raw.replace(/\s+/g, " ") });
-    } catch (_) {
-      // extension vừa tải lại, bỏ qua
-    }
-    pending = null;
+    pending = {
+      post: (info.text || "").slice(0, 600), author: info.author, images: info.images || [], suggested, at: Date.now(),
+      onMyPost: info.onMyPost, myPost: info.myPost, myPostId: info.myPostId
+    };
   }
   // Bắt cú bấm nút Reply/Post của X (chạy trước X để còn đọc được chữ trong ô).
   document.addEventListener(
@@ -1073,7 +1285,6 @@
       const btn = e.target.closest && e.target.closest('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]');
       if (btn) {
         trackSend();
-        savePosted();
       }
     },
     true
@@ -1084,7 +1295,6 @@
     (e) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.closest?.('[data-testid="tweetTextarea_0"]')) {
         trackSend();
-        savePosted();
       }
     },
     true
@@ -1096,6 +1306,7 @@
     // Trang chi tiết bài có sẵn ô trả lời ngay dưới, còn trên dòng thời gian phải bấm nút Trả lời.
     const replyBtn = article.querySelector('[data-testid="reply"]');
     if (replyBtn) {
+      quickSkipUntil = Date.now() + 5000; // đã có câu từ bảng gợi ý, dải gợi ý nhanh khỏi gọi AI lần nữa
       replyBtn.click();
       composer = await waitFor(() => document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]'), 2500);
     }
@@ -1115,6 +1326,212 @@
       toast("Đã điền. Đọc lại rồi tự bấm Trả lời nhé.");
     }
   }
+
+  // ---------- Dải gợi ý nhanh ngay dưới ô trả lời của X ----------
+  // Bấm nút Trả lời của X: dưới khung trả lời hiện vài câu ngắn có emoji, bấm một câu là điền vào ô (Alt+1..5).
+  // Bạn vẫn tự sửa và tự bấm Trả lời.
+  const quickStyle = document.createElement("style");
+  quickStyle.textContent = `
+    .quick { position: fixed; z-index: 2147483646; display: none; box-sizing: border-box;
+      background: #fff; color: #0f1419; border: 1px solid #cfd9de; border-radius: 16px; padding: 8px 10px 10px;
+      box-shadow: 0 8px 28px rgba(0,0,0,.18); font: 14px/1.35 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+    .quick.dark { background: #15202b; color: #e7e9ea; border-color: #38444d; }
+    .quick.open { display: block; }
+    .quick .qh { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .7; margin-bottom: 6px; }
+    .quick .qh span { flex: 1; }
+    .quick .qh button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; padding: 0 4px; }
+    .quick .qlist { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+    .quick .qi { text-align: left; border: 1px solid rgba(29,155,240,.35); background: rgba(29,155,240,.06); color: inherit;
+      border-radius: 12px; padding: 7px 10px; cursor: pointer; font: inherit; display: flex; gap: 8px; }
+    .quick .qi:hover { background: rgba(29,155,240,.16); }
+    .quick .qi.on { border-color: #1d9bf0; background: rgba(29,155,240,.22); }
+    .quick .qi b { color: #1d9bf0; font-size: 12px; min-width: 12px; }
+    .quick .qwait, .quick .qnote { font-size: 13px; opacity: .75; padding: 4px 2px; }
+    .quick .qctx { font-size: 12px; opacity: .75; margin: -2px 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .quick .qctx:empty { display: none; }
+    .quick .qgo { border: 1px solid #1d9bf0; color: #1d9bf0; background: transparent; border-radius: 999px; padding: 4px 12px;
+      cursor: pointer; font: inherit; font-weight: 600; }
+  `;
+  const quick = document.createElement("div");
+  quick.className = "quick";
+  quick.innerHTML = `<div class="qh"><span>💬 Gợi ý nhanh · bấm để điền (Alt+1..5)</span>
+    <button class="qre" title="Gợi ý câu khác">↻</button><button class="qx" title="Ẩn">✕</button></div>
+    <div class="qctx"></div><div class="qlist"></div>`;
+  shadow.append(quickStyle, quick);
+  const qList = quick.querySelector(".qlist");
+  const quickCache = new Map(); // bài -> các câu đã gợi ý (mở lại cùng bài thì khỏi gọi AI)
+  let quickSkipUntil = 0;
+  let quickCur = null; // { ta, art, key, hidden, req }
+  // Không cho nút trong dải lấy mất con trỏ khỏi ô trả lời của X.
+  quick.addEventListener("mousedown", (e) => e.preventDefault());
+
+  function replyDialog() {
+    for (const dlg of document.querySelectorAll('[role="dialog"]')) {
+      const ta = dlg.querySelector('[data-testid="tweetTextarea_0"]');
+      const art = dlg.querySelector('article[data-testid="tweet"]');
+      if (ta && art) return { ta, art };
+    }
+    return null;
+  }
+  // Khung trắng của cửa sổ trả lời: tổ tiên lớn nhất của ô soạn có nền đặc (không trong suốt) và hẹp hơn màn hình.
+  // (Lớp phủ xám của X có nền mờ, các lớp bọc ngoài trong suốt nên không bị chọn nhầm.)
+  function dialogBox(ta) {
+    let box = null;
+    for (let el = ta.parentElement; el && el !== document.body; el = el.parentElement) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= innerWidth * 0.9) break;
+      const bg = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
+      if (bg && (bg.length < 4 || Number(bg[3]) === 1) && r.height > 80) box = el;
+    }
+    return (box || ta).getBoundingClientRect();
+  }
+  // Dải gợi ý: ngay dưới khung trả lời, rộng 1/3 màn hình, canh giữa theo khung.
+  function placeQuick() {
+    if (!quickCur) return;
+    const r = dialogBox(quickCur.ta);
+    const w = Math.min(innerWidth - 16, Math.max(360, Math.round(innerWidth / 3)));
+    const left = Math.max(8, Math.min(innerWidth - w - 8, Math.round(r.left + r.width / 2 - w / 2)));
+    quick.style.left = `${left}px`;
+    quick.style.width = `${w}px`;
+    let top = r.bottom + 8;
+    if (innerHeight - top < 140) top = Math.max(8, innerHeight - 140); // khung trả lời cao gần hết màn hình
+    quick.style.top = `${top}px`;
+    qList.style.maxHeight = `${Math.max(80, innerHeight - top - 52)}px`;
+    const bg = (getComputedStyle(document.body).backgroundColor.match(/\d+/g) || [255, 255, 255]).map(Number);
+    quick.classList.toggle("dark", bg[0] * 0.3 + bg[1] * 0.59 + bg[2] * 0.11 < 128);
+  }
+  function quickRender(list, note) {
+    qList.innerHTML = "";
+    if (note) qList.append(Object.assign(document.createElement("div"), { className: "qnote", textContent: note }));
+    list.forEach((text, i) => {
+      const b = document.createElement("button");
+      b.className = "qi";
+      b.innerHTML = `<b>${i + 1}</b><span></span>`;
+      b.lastChild.textContent = text;
+      b.addEventListener("click", () => quickPick(i));
+      qList.appendChild(b);
+    });
+  }
+  // Thông tin bài đang trả lời: bản trong cửa sổ trả lời của X thiếu dòng "Đang trả lời @...",
+  // nên lấy thêm từ thẻ bài bạn vừa bấm nút Trả lời (trên trang Thông báo / dòng thời gian).
+  const normT = (t) => String(t || "").replace(/\s+/g, " ").trim().slice(0, 60);
+  function quickInfo(cur) {
+    const base = getTweetInfo(cur.art);
+    const t = cur.tgt;
+    if (!t || (base.text && t.text && normT(base.text) !== normT(t.text))) return base;
+    return {
+      ...base,
+      text: base.text || t.text,
+      author: base.author || t.author,
+      images: base.images.length ? base.images : t.images || [],
+      hasMedia: base.hasMedia || t.hasMedia,
+      id: base.id || t.id,
+      onMyPost: base.onMyPost || t.onMyPost,
+      myPost: base.myPost || t.myPost,
+      myPostId: base.myPostId || t.myPostId
+    };
+  }
+  async function quickPick(i) {
+    const b = qList.querySelectorAll(".qi")[i];
+    if (!b || !quickCur) return;
+    const text = b.lastChild.textContent;
+    qList.querySelectorAll(".qi").forEach((x) => x.classList.toggle("on", x === b));
+    rememberPending(quickCur.art, text);
+    const info = quickInfo(quickCur);
+    if (pending) Object.assign(pending, { post: (info.text || "").slice(0, 600), author: info.author, onMyPost: info.onMyPost, myPost: info.myPost, myPostId: info.myPostId });
+    if (!(await insertText(quickCur.ta, text))) {
+      await navigator.clipboard.writeText(text).catch(() => {});
+      toast("Chưa điền được. Đã sao chép, bấm vào ô trả lời rồi Ctrl+V.");
+    }
+  }
+  // Dòng tiêu đề + dòng "đang trả lời ai" của dải, vẽ lại cho mỗi cửa sổ trả lời (không để sót của lần trước).
+  function quickHeader(info, by) {
+    quick.querySelector(".qh span").textContent =
+      (info.onMyPost ? "💬 Đáp bình luận dưới bài của bạn" : "💬 Gợi ý nhanh") + (by ? ` · ${by}` : "") + " · Alt+1..5";
+    const who = (info.author.match(/^[^@\n]+/) || [""])[0].trim() || info.author;
+    const ctxEl = quick.querySelector(".qctx");
+    ctxEl.textContent = info.onMyPost
+      ? `Bài của bạn: "${normT(info.myPost) || "(chưa đọc được)"}" → ${who}: "${normT(info.text)}"`
+      : `Trả lời ${who}: "${normT(info.text) || "(bài không có chữ)"}"`;
+    ctxEl.title = (info.myPost ? `Bài của bạn:\n${info.myPost}\n\n` : "") + `${info.author}:\n${info.text}`;
+  }
+  function quickLoad(force) {
+    const cur = quickCur;
+    if (!cur) return;
+    const info = quickInfo(cur);
+    quickHeader(info, "");
+    if (!force && quickCache.has(cur.key)) return quickRender(quickCache.get(cur.key));
+    if (!chrome.runtime?.id) return quickRender([], "Extension vừa được cập nhật. Bấm F5 trang X.");
+    const t0 = Date.now();
+    qList.innerHTML = `<div class="qwait">Đang nghĩ câu trả lời...</div>`;
+    const timer = setInterval(() => {
+      const w = qList.querySelector(".qwait");
+      if (!w || quickCur !== cur) return clearInterval(timer);
+      w.textContent = `Đang nghĩ câu trả lời... ${Math.round((Date.now() - t0) / 1000)}s`;
+    }, 1000);
+    const reqId = "q" + Date.now() + Math.random();
+    cur.req = reqId;
+    try {
+      chrome.runtime.sendMessage({ type: "xcs-suggest", quick: true, reqId, ...info }, (res) => {
+        clearInterval(timer);
+        if (quickCur !== cur || cur.req !== reqId) return;
+        if (chrome.runtime.lastError || !res) return quickRender([], "Không kết nối được extension. Tải lại trang X.");
+        const list = res.suggestions || [];
+        if (list.length && res.source === "ai") quickCache.set(cur.key, list);
+        quickHeader(info, res.source === "ai" ? `${res.provider || "AI"}${res.model ? " · " + res.model : ""}` : "câu mẫu");
+        quickRender(list, res.source === "ai" ? "" : res.note);
+        placeQuick();
+      });
+    } catch (_) {
+      clearInterval(timer);
+      quickRender([], "Extension vừa được cập nhật. Bấm F5 trang X.");
+    }
+  }
+  quick.querySelector(".qre").addEventListener("click", () => quickLoad(true));
+  quick.querySelector(".qx").addEventListener("click", () => {
+    if (quickCur) quickCur.hidden = true;
+    quick.classList.remove("open");
+  });
+  const quickTimer = setInterval(() => {
+    if (!chrome.runtime?.id) return clearInterval(quickTimer);
+    const d = replyDialog();
+    if (!d) {
+      quickCur = null;
+      return quick.classList.remove("open");
+    }
+    if (!quickCur || quickCur.ta !== d.ta) {
+      const info = getTweetInfo(d.art);
+      const tgt = replyTarget && Date.now() - replyTarget.at < 10000 ? replyTarget : null;
+      const cur = (quickCur = { ...d, tgt, key: `${info.author}\n${info.text}\n${(info.images || []).join(" ")}`, hidden: false });
+      chrome.storage.local.get({ quickReply: true }, ({ quickReply }) => {
+        if (!quickReply || quickCur !== cur) return;
+        // Câu đã được điền từ bảng "💬 Gợi ý": không hiện dải nữa (bạn đã chọn câu rồi).
+        if (Date.now() < quickSkipUntil) {
+          cur.hidden = true;
+          return quick.classList.remove("open");
+        }
+        quick.classList.add("open");
+        quickLoad(false);
+        placeQuick();
+      });
+      return;
+    }
+    if (!quickCur.hidden && quick.classList.contains("open")) placeQuick();
+  }, 300);
+  // Alt+1..5: chọn câu trong dải gợi ý nhanh (cả khi đang gõ trong ô trả lời).
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || !quickCur || !quick.classList.contains("open")) return;
+      const n = Number(e.key);
+      if (n >= 1 && n <= 5 && qList.querySelectorAll(".qi")[n - 1]) {
+        e.preventDefault();
+        e.stopPropagation();
+        quickPick(n - 1);
+      }
+    },
+    true
+  );
 
   // ---------- Thông báo nhỏ ----------
   const toastEl = document.createElement("div");

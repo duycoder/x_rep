@@ -39,16 +39,46 @@
     .checklist .add input { flex: 1; padding: 5px 10px; }
     .checklist .add button { margin: 0; padding: 5px 14px; }
     .box { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-top: 24px; color: var(--muted); }
+    nav.tabs { position: sticky; top: 0; z-index: 5; background: var(--bg); display: flex; flex-wrap: wrap; gap: 4px;
+      border-bottom: 1px solid var(--line); padding: 8px 0 0; margin: 0 0 8px; }
+    nav.tabs a { padding: 8px 12px; border-radius: 10px 10px 0 0; color: var(--muted); text-decoration: none; font-weight: 600;
+      border: 1px solid transparent; border-bottom: 0; margin-bottom: -1px; }
+    nav.tabs a:hover { color: var(--fg); }
+    nav.tabs a.on { color: var(--accent); border-color: var(--line); background: var(--bg); }
+    section.tab { display: none; padding-bottom: 80px; }
+    section.tab.on { display: block; }
+    section.tab > h2:first-child { margin-top: 12px; }
+    .savebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; background: var(--bg); border-top: 1px solid var(--line);
+      padding: 10px 16px; text-align: center; }
+    .savebar button { margin: 0; }
+    .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 10px 0; }
+    .pager .pg { margin: 0; min-width: 32px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line);
+      background: transparent; color: inherit; font: 13px/1.2 inherit; cursor: pointer; }
+    .pager .pg.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .pager .pg:disabled:not(.on) { opacity: .35; cursor: default; }
+    .pager .pginfo { margin-left: 8px; color: var(--muted); font-size: 12px; }
+    .trainsum { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; line-height: 1.9; }
+    .trainsum a { color: var(--accent); margin-left: 6px; }
   </style>
 </head>
 <body>
   <h1>Cài đặt gợi ý bình luận</h1>
 
+  <nav class="tabs" id="tabs">
+    <a href="#ai" data-tab="ai">🤖 AI</a>
+    <a href="#reply" data-tab="reply">💬 Bình luận</a>
+    <a href="#post" data-tab="post">✍️ Bài đăng</a>
+    <a href="#fb" data-tab="fb">📘 Facebook</a>
+    <a href="#data" data-tab="data">💾 Dữ liệu &amp; train</a>
+  </nav>
+
+  <section class="tab" id="tab-ai">
   <label for="provider">Nhà cung cấp AI</label>
   <select id="provider">
     <option value="hybrid">Kết hợp: bài quen chạy trên máy, bài lạ hỏi AI trên mạng</option>
     <option value="gemini">Google Gemini (có gói miễn phí)</option>
     <option value="groq">Groq (có gói miễn phí, rất nhanh)</option>
+    <option value="openai">ChatGPT (OpenAI, trả phí theo lượng dùng)</option>
     <option value="ollama">Ollama (chạy trên máy, không cần mạng)</option>
     <option value="claude">Claude (trả phí theo lượng dùng)</option>
   </select>
@@ -63,6 +93,7 @@
     <select id="hybridCloud">
       <option value="groq">Groq</option>
       <option value="gemini">Gemini</option>
+      <option value="openai">ChatGPT</option>
     </select>
   </div>
 
@@ -80,6 +111,20 @@
       <option value="gemini-flash-latest">Gemini Flash (mặc định)</option>
       <option value="gemini-flash-lite-latest">Gemini Flash Lite</option>
     </select>
+  </div>
+
+  <div id="openai-box" hidden>
+    <label for="openaiKey">ChatGPT (OpenAI) API key
+      <small>Lấy ở platform.openai.com → API keys → Create new secret key, rồi nạp tiền ở Billing (tối thiểu 5 USD).
+        Gói ChatGPT Plus KHÔNG dùng được ở đây, API tính tiền riêng. Key chỉ lưu trên máy này.</small>
+    </label>
+    <input id="openaiKey" type="password" placeholder="sk-..." autocomplete="off" />
+
+    <label for="openaiModel">Model ChatGPT
+      <small>gpt-5-mini: rẻ, nhanh, viết tốt (nên dùng). gpt-5: hay hơn nhưng đắt và chậm hơn. gpt-5-nano: rẻ nhất.</small>
+    </label>
+    <select id="openaiModel"></select>
+    <button type="button" id="loadOpenai" class="sec">Tải danh sách model</button><span id="openaiStatus" class="note"></span>
   </div>
 
   <div id="groq-box" hidden>
@@ -128,6 +173,22 @@
   </div>
   <p style="margin:14px 0 0;color:var(--muted)">Để trống key thì extension dùng câu mẫu có sẵn.</p>
 
+  <label class="chk"><input id="ollamaFallback" type="checkbox" /> Dùng Ollama (trên máy) khi AI trên mạng lỗi
+    <small>Khi Groq / Gemini hết lượt hoặc lỗi, tự chuyển sang Ollama thay vì câu mẫu. Cần mở 2-bat-ollama.bat
+      và đã bấm "Kiểm tra kết nối &amp; tải danh sách" ở phần Ollama ít nhất một lần.</small>
+  </label>
+
+  <label class="chk"><input id="ollamaImages" type="checkbox" /> Cho Ollama xem ảnh
+    <small>Rất chậm khi máy không có card đồ hoạ rời (mỗi lần có thể hơn 1 phút). Tắt thì Ollama chỉ đọc chữ, nhanh hơn nhiều.</small>
+  </label>
+
+  <label class="chk"><input id="sendImages" type="checkbox" /> Cho AI xem ảnh trong bài
+    <small>Gemini và Claude xem được ảnh. Groq chỉ xem được với model có 📷 trong danh sách. Gửi ảnh làm mỗi lần gợi ý chậm hơn một chút
+      và tốn nhiều lượt/token hơn.</small>
+  </label>
+  </section>
+
+  <section class="tab" id="tab-reply">
   <label for="language">Ngôn ngữ bình luận</label>
   <select id="language">
     <option value="auto">Tự động theo ngôn ngữ bài đăng</option>
@@ -151,18 +212,8 @@
     <option value="5">5</option>
   </select>
 
-  <label class="chk"><input id="ollamaFallback" type="checkbox" /> Dùng Ollama (trên máy) khi AI trên mạng lỗi
-    <small>Khi Groq / Gemini hết lượt hoặc lỗi, tự chuyển sang Ollama thay vì câu mẫu. Cần mở 2-bat-ollama.bat
-      và đã bấm "Kiểm tra kết nối &amp; tải danh sách" ở phần Ollama ít nhất một lần.</small>
-  </label>
-
-  <label class="chk"><input id="ollamaImages" type="checkbox" /> Cho Ollama xem ảnh
-    <small>Rất chậm khi máy không có card đồ hoạ rời (mỗi lần có thể hơn 1 phút). Tắt thì Ollama chỉ đọc chữ, nhanh hơn nhiều.</small>
-  </label>
-
-  <label class="chk"><input id="sendImages" type="checkbox" /> Cho AI xem ảnh trong bài
-    <small>Gemini và Claude xem được ảnh. Groq chỉ xem được với model có 📷 trong danh sách. Gửi ảnh làm mỗi lần gợi ý chậm hơn một chút
-      và tốn nhiều lượt/token hơn.</small>
+  <label class="chk"><input id="quickReply" type="checkbox" /> Gợi ý nhanh dưới ô trả lời
+    <small>Bấm nút Trả lời của X là hiện vài câu ngắn có emoji ngay dưới khung, bấm một câu (hoặc Alt+1..5) để điền.</small>
   </label>
 
   <label class="chk"><input id="capitalize" type="checkbox" /> Viết hoa chữ đầu câu
@@ -200,11 +251,14 @@
   </label>
   <textarea id="persona"></textarea>
 
+
   <label class="chk"><input id="learn" type="checkbox" /> Học từ bình luận bạn đã đăng
     <small>Khi bạn bấm Điền rồi bấm Reply trên X, extension lưu bài + câu bạn thật sự đăng (kể cả khi bạn sửa lại).
       Lần sau AI xem vài câu gần chủ đề nhất để viết giống giọng bạn. Chỉ lưu trên máy này.</small>
   </label>
+  </section>
 
+  <section class="tab" id="tab-post">
   <h2>Gợi ý bài đăng</h2>
   <p class="note" style="margin-left:0">Muốn AI khám phá cơ hội từ tin tức, Hacker News, thời tiết, dịp lễ và kiến thức của bạn, nghĩ ý tưởng, viết nháp có chấm điểm và ảnh: mở
     <a href="studio.html" target="_blank">📋 Content Studio</a>.</p>
@@ -214,22 +268,77 @@
   <div id="postGroups"></div>
   <p class="note" style="margin-left:0">Nhóm từ "Tâm trạng" trở xuống nằm trong mục <b>⚙ Thêm tuỳ chọn</b> trên bảng ở X.</p>
 
-  <button id="save">Lưu</button><span id="status"></span>
+  </section>
+
+  <section class="tab" id="tab-fb">
+  <h2>Page Facebook để học</h2>
+  <label class="chk"><input id="fbSave" type="checkbox" /> Lưu chữ bài đăng của các page dưới đây khi bạn lướt Facebook
+    <small>Bạn tự mở page và cuộn, extension chỉ đọc chữ bài đang hiện (tự bấm "Xem thêm" để lấy đủ). Không tự cuộn, không gửi gì lên Facebook.
+      Bài lưu vào máy và vào thư mục <code>fb\&lt;tên page&gt;</code> trong thư mục lưu ở trên.</small>
+  </label>
+  <label class="chk"><input id="fbAutoBottom" type="checkbox" /> Tự lưu mọi bài khi cuộn tới đáy bài
+    <small>Cuộn hết một bài (đáy bài hiện trên màn hình) là bài đó tự lưu vào mục Chờ duyệt, nút bên phải bài đổi thành "✓ Đã tự lưu".
+      Tắt đi thì chỉ tự lưu bài của các page dưới đây, bài khác bấm "💾 Lưu bài".</small>
+  </label>
+  <label for="fbPages">Các page (mỗi dòng một page: tên trong link, link đầy đủ, hoặc profile.php?id=...)</label>
+  <textarea id="fbPages" rows="3" placeholder="nguoibl"></textarea>
+  <label class="chk"><input id="fbTrain" type="checkbox" /> Đưa bài page vào dữ liệu huấn luyện (kiểu "viết bài theo phong cách page hay")
+    <small>Bài page cũng được dùng làm mẫu phong cách (không chép) khi bấm ✍️ Gợi ý bài trên X.</small>
+  </label>
+  <p class="note" style="margin-left:0"><span id="fbCount"></span></p>
+  <button type="button" id="fbOpen" class="sec">📋 Xem dữ liệu bài viết</button>
+  <button type="button" id="fbClear" class="sec">Xoá bài Facebook đã lưu</button>
+  <p class="note" style="margin-left:0">Chỉ bài bạn bấm "Đưa vào dữ liệu train" trong trang Xem dữ liệu mới được xuất ra để huấn luyện.</p>
+
+  </section>
+
+  <section class="tab" id="tab-data">
+  <h2>Dữ liệu huấn luyện</h2>
+  <div class="trainsum">
+    <div>💬 Trả lời trên X: <b id="tsReplies">…</b> · đáp bình luận bài mình: <b id="tsOwn">…</b></div>
+    <div>📘 Bài page Facebook đã duyệt vào train: <b id="tsFb">…</b> <span id="tsFbMore" class="note"></span>
+      <a href="#" id="tsFbOpen">📋 Xem / duyệt bài Facebook</a></div>
+  </div>
+  <label for="exportScope">Xuất những gì</label>
+  <select id="exportScope">
+    <option value="all">Tất cả (trả lời X + bài Facebook): một model làm hết</option>
+    <option value="x">Chỉ trả lời trên X</option>
+    <option value="fb">Chỉ bài page Facebook (học riêng phong cách viết bài)</option>
+  </select>
+  <button type="button" id="exportTrain" class="sec">⬇ Xuất dữ liệu huấn luyện</button>
+  <span id="exportStatus" class="note"></span>
+  <p class="note" style="margin-left:0">Ra file <code>xcs-train.jsonl</code> để huấn luyện trên Colab, xem <code>train/HUONG-DAN.md</code>.
+    Bài Facebook chỉ được xuất khi đã bấm "Đưa vào dữ liệu train" trong trang 📋.</p>
+
+  <h2>Lưu vào máy</h2>
+  <label class="chk"><input id="saveToDisk" type="checkbox" /> Lưu mỗi bài đăng / câu trả lời vào máy
+    <small>Mỗi lần đăng thành công, tạo một thư mục <code>ngày\giờ tra-loi @tác_giả\</code> gồm <code>noi-dung.txt</code>
+      (bài + câu bạn trả lời), <code>info.json</code> và ảnh. Ghi thẳng ra ổ đĩa, không hiện hộp thoại tải về.
+      Cần cài một lần: <code>powershell -ExecutionPolicy Bypass -File native\cai-dat.ps1</code> (trong thư mục extension).</small>
+  </label>
+  <label>Thư mục lưu (đường dẫn đầy đủ)</label>
+  <input id="diskFolder" type="text" placeholder="D:\MMO\X-data" />
+  <span id="diskStatus" class="note"></span>
 
   <h2>Bình luận đã lưu <span id="histCount" class="note"></span></h2>
+  <input id="histQ" type="search" placeholder="Tìm trong bài hoặc câu trả lời..." />
+  <div class="pager" id="histPagerTop" hidden></div>
   <div id="histList"></div>
+  <div class="pager" id="histPagerBot" hidden></div>
   <button type="button" id="histClear" class="sec">Xoá hết</button>
-  <button type="button" id="exportTrain" class="sec">Xuất dữ liệu huấn luyện</button>
-  <span id="exportStatus" class="note"></span>
-  <p class="note" style="margin-left:0">Dùng để huấn luyện model riêng nói giống bạn. Xem hướng dẫn trong
-    <code>D:\Vibes\MMO\ollama-local\train\HUONG-DAN.txt</code>. Nên có từ 200 câu trở lên.</p>
+  <button type="button" id="exportAll" class="sec">Tải về tất cả bài &amp; trả lời (sao lưu)</button>
 
   <div class="box">
     Extension không tự thả tim, không tự đăng và không tự cuộn liên tục. X khoá tài khoản dùng bot tương tác tự động,
     và tài khoản bị đánh dấu spam sẽ mất quyền chia sẻ doanh thu. Hãy đọc lại từng câu trước khi đăng.
   </div>
+  </section>
 
+  <div class="savebar"><button id="save">Lưu</button><span id="status"></span></div>
+
+  <script src="tabs.js"></script>
   <script src="postopts.js"></script>
+  <script src="pager.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

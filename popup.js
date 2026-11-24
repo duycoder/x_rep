@@ -1,15 +1,16 @@
 chrome.storage.local.get(
   {
     provider: "gemini", geminiKey: "", geminiModel: "gemini-flash-latest",
-    groqKey: "", groqModel: "qwen/qwen3.8-27b", apiKey: "", model: "claude-haiku-5-5", ollamaModel: "gemma3:4b", hybridCloud: "groq"
+    groqKey: "", groqModel: "qwen/qwen3.8-27b", openaiKey: "", openaiModel: "gpt-5-mini", apiKey: "", model: "claude-haiku-5-5", ollamaModel: "gemma3:4b", hybridCloud: "groq"
   },
   (s) => {
     const P = {
       gemini: ["Gemini", s.geminiKey, s.geminiModel],
       groq: ["Groq", s.groqKey, s.groqModel],
+      openai: ["ChatGPT", s.openaiKey, s.openaiModel],
       claude: ["Claude", s.apiKey, s.model],
       ollama: ["Ollama", "local", s.ollamaModel],
-      hybrid: ["Kết hợp", "local", `Ollama + ${s.hybridCloud === "gemini" ? "Gemini" : "Groq"}`]
+      hybrid: ["Kết hợp", "local", `Ollama + ${{ gemini: "Gemini", openai: "ChatGPT" }[s.hybridCloud] || "Groq"}`]
     };
     const [name, key, model] = P[s.provider] || P.gemini;
     document.getElementById("st").textContent = key

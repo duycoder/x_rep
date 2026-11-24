@@ -1,0 +1,9 @@
+{
+    "path":  "D:\\MMO\\VidGen\\x_rep\\native\\xcs_saver.bat",
+    "description":  "X Goi Y: save posts / replies to disk",
+    "name":  "com.xcs.saver",
+    "allowed_origins":  [
+                            "chrome-extension://cembecdhkabbbhfeeihglhfijcjcpghc/"
+                        ],
+    "type":  "stdio"
+}

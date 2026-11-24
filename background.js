@@ -4,12 +4,15 @@ importScripts("templates.js", "studio-core.js"); // studio-core: Content Studio 
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const DEFAULTS = {
   provider: "gemini", // gemini | groq | claude
   groqKey: "",
   groqModel: "qwen/qwen3.8-27b",
   groqVisionModels: [],
+  openaiKey: "", // ChatGPT (OpenAI API, trả phí theo lượng dùng)
+  openaiModel: "gpt-5-mini",
   ollamaUrl: "http://localhost:11434",
   ollamaModel: "gemma3:4b",
   ollamaVision: false,
@@ -31,7 +34,9 @@ const DEFAULTS = {
   emojiRepeat: 3,
   sendImages: true,
   capitalize: true,
-  learn: true
+  learn: true,
+  saveToDisk: true, // lưu từng bài / câu trả lời ra ổ đĩa (native/xcs_saver.cjs)
+  diskFolder: "D:\\MMO\\X-data"
 };
 
 async function getSettings() {
@@ -40,7 +45,7 @@ async function getSettings() {
 }
 
 // ---------- Học từ bình luận đã đăng ----------
-const HISTORY_MAX = 300;
+const HISTORY_MAX = 5000; // giữ nhiều để có dữ liệu huấn luyện model riêng
 
 // Chữ chung chung, không nói lên chủ đề bài (bỏ khi so độ giống).
 const STOP = new Set(
@@ -70,7 +75,7 @@ function words(s) {
 }
 
 // Chọn k ví dụ hợp nhất: giống chủ đề bài hiện tại, ưu tiên câu bạn đã tự sửa và câu gần đây.
-function pickExamples(history, postText, k = 6) {
+function pickExamples(history, postText, k = 6, onMyPost = false) {
   if (!history.length) return [];
   const cur = words(postText || "");
   const n = history.length;
@@ -79,7 +84,7 @@ function pickExamples(history, postText, k = 6) {
     let inter = 0;
     w.forEach((x) => cur.has(x) && inter++);
     const sim = inter / (Math.sqrt(w.size * cur.size) || 1);
-    return { h, score: sim + (h.edited ? 0.15 : 0) + (0.1 * i) / n };
+    return { h, score: sim + (h.edited ? 0.15 : 0) + (0.1 * i) / n + (!!h.onMyPost === !!onMyPost ? 0.3 : 0) };
   });
   scored.sort((a, b) => b.score - a.score);
   const picked = scored.slice(0, k - 2).map((x) => x.h);
@@ -228,10 +233,67 @@ function addEmojiTail(text, i, emojis, settings) {
   return `${base} ${m[0].repeat(n)}`;
 }
 
+// Dải gợi ý nhanh dưới ô trả lời: câu nào cũng có emoji, số lượng 1-3 cái khác nhau cho giống người gõ thật.
+const QUICK_EMOJI = [
+  [/haha|hihi|kk|=\)\)|cười|hài|lầy|vl|xỉu/i, "😂"],
+  [/ngon|thèm|đói|(^|\s)ăn(\s|$)|món|lẩu|ốc|bún|phở|cơm/i, "🤤"],
+  [/đẹp|xinh|cute|dễ thương|yêu|thích quá|mê/i, "😍"],
+  [/buồn|tiếc|thương|khóc|mệt|đau/i, "🥺"],
+  [/chill|nghỉ|ngủ|nằm|thư giãn/i, "😌"],
+  [/\?\s*$/, "👀"],
+  [/chúc|cố lên|giỏi|đỉnh|xịn|tuyệt/i, "🔥"]
+];
+const QUICK_DEFAULT = ["😆", "🥰", "👍", "😂", "🤭"];
+// Câu hỏi trong bình luận (thường ở cuối): có dấu "?" hoặc kết thúc bằng từ hỏi tiếng Việt. Trả về câu hỏi, không có thì "".
+const Q_END = /(gì|sao|nào|đâu|chưa|không|ko|hông|hok|hả|nhỉ|ai|mấy|bao giờ|bao nhiêu|thế nào|ra sao)(\s+(vậy|vậy ta|thế|ta|nhỉ|ạ|đó|z|dị|vại|nè|hả))?\s*[.!…~]*$/i;
+function questionOf(comment) {
+  const parts = String(comment || "")
+    .replace(/\p{Extended_Pictographic}/gu, " ")
+    .split(/(?<=[.!?…])\s+|\n+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) if (/\?/.test(parts[i]) || Q_END.test(parts[i])) return parts[i];
+  return "";
+}
+// Chủ bài đáp bình luận: bỏ emoji AI tự gắn, giữ câu đúng độ dài, thiếu thì bù bằng câu đáp quen thuộc.
+// Bình luận thường: câu đáp ngắn 1-4 chữ ("Dạ vâng ạ", "Hihi"). Bình luận có câu hỏi: phải trả lời thật, 2-14 chữ.
+const OWN_POOL = ["Dạ vâng ạ", "Hihi", "Được thui", "Chuẩn luôn", "Cảm ơn nha", "Hehe", "Ok nhé", "Đúng rồi á", "Nhất trí", "Haha thật"];
+const OWN_POOL_Q = ["Hihi bí mật nha", "Để mình nghĩ đã nè", "Chắc nằm nhà chill thôi á"];
+function ownPool(comment) {
+  return [...(questionOf(comment) ? OWN_POOL_Q : OWN_POOL)].sort(() => Math.random() - 0.5);
+}
+function shortOwnReplies(list, comment, count) {
+  const strip = (t) => String(t || "").replace(/[\s\p{Extended_Pictographic}\uFE0F\u200D\p{Emoji_Modifier}]+$/u, "").trim();
+  const q = !!questionOf(comment);
+  const [lo, hi] = q ? [2, 14] : [1, 4];
+  const out = [];
+  for (const t of list.map(strip)) {
+    const n = t.split(/\s+/).filter(Boolean).length;
+    if (q && n <= 3 && /^(dạ|vâng|ok|hi|he|ha|chuẩn|đúng|cảm ơn|được|nhất trí)/i.test(t)) continue; // đáp cho có, không trả lời câu hỏi
+    if (n >= lo && n <= hi && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  if (q && out.length) return out.slice(0, count); // câu trả lời thật của AI, không bù câu chung chung
+  for (const t of ownPool(comment)) if (out.length < count && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
+  return out.slice(0, count);
+}
+
+function quickEmoji(text, i, emojis, light) {
+  // Đáp bình luận dưới bài của mình: câu rất ngắn, chỉ nửa số câu có emoji, mỗi câu 1 cái ("Hihi" thì để nguyên).
+  if (light && (i % 2 === 1 || /^(hi|he|ha|kk)+$/i.test(text.replace(/[^\p{L}]/gu, "")))) return text;
+  const raw = String((emojis || [])[i] || "").match(ONE_EMOJI_RE);
+  if (!raw && ONE_EMOJI_RE.test(text)) return text; // câu đã tự có emoji
+  const base = text.replace(/[\s\p{Extended_Pictographic}️‍\p{Emoji_Modifier}]+$/u, "").trim();
+  const e = raw ? raw[0] : (QUICK_EMOJI.find(([re]) => re.test(base)) || [0, QUICK_DEFAULT[i % QUICK_DEFAULT.length]])[1];
+  const n = light ? 1 : [1, 3, 2, 1, 3][i % 5];
+  return `${base} ${e.repeat(n)}`;
+}
+
 function examplesBlock(examples) {
   if (!examples || !examples.length) return "";
-  const lines = examples.map(
-    (e) => `- Bài: "${e.post.replace(/\s+/g, " ").slice(0, 140)}"\n  Người dùng đã đăng: "${e.reply}"`
+  const lines = examples.map((e) =>
+    e.onMyPost
+      ? `- Bình luận dưới bài của chính họ${e.myPost ? ` (bài: "${e.myPost.replace(/\s+/g, " ").slice(0, 80)}")` : ""}: "${e.post.replace(/\s+/g, " ").slice(0, 140)}"\n  Người dùng đáp: "${e.reply}"`
+      : `- Bài: "${e.post.replace(/\s+/g, " ").slice(0, 140)}"\n  Người dùng đã đăng: "${e.reply}"`
   );
   return [
     "",
@@ -241,23 +303,338 @@ function examplesBlock(examples) {
   ].join("\n");
 }
 
+// Chữ bài cha của một bình luận (vd bài của bạn mà người ta bình luận), lấy từ dịch vụ nhúng bài công khai của X.
+// Dùng khi trang X chưa tải bài cha. Nhớ lại theo id để khỏi hỏi lại.
+const parentCache = new Map();
+async function parentText(commentId) {
+  const id = String(commentId || "");
+  if (!/^\d{5,25}$/.test(id)) return "";
+  if (parentCache.has(id)) return parentCache.get(id);
+  let text = "";
+  try {
+    const token = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, "");
+    const r = await fetch(`https://cdn.syndication.twimg.com/tweet-result?id=${id}&lang=en&token=${token}`);
+    if (r.ok) {
+      const j = await r.json();
+      const p = j.parent || {};
+      text = String((p.note_tweet && p.note_tweet.text) || p.text || "")
+        .replace(/^(@\w+\s+)+/, "")
+        .replace(/\s*https:\/\/t\.co\/\w+\s*$/, "")
+        .trim()
+        .slice(0, 1000);
+    }
+  } catch (_) {
+    // không lấy được thì thôi
+  }
+  parentCache.set(id, text);
+  if (parentCache.size > 500) parentCache.delete(parentCache.keys().next().value);
+  return text;
+}
+
 async function saveExample(msg) {
   const reply = String(msg.reply || "").trim();
   if (!reply) return;
+  let imageDesc = "";
+  try {
+    const st = await getSettings();
+    if (st.sendImages && Array.isArray(msg.images) && msg.images.length) imageDesc = await describeImages(msg.images, st, { local: false });
+  } catch (_) {
+    // không mô tả được thì thôi
+  }
   const { history = [] } = await chrome.storage.local.get({ history: [] });
+  const onMyPost = !!msg.onMyPost;
+  let myPost = onMyPost ? String(msg.myPost || "") : "";
+  if (onMyPost && !myPost && msg.myPostId) {
+    // Chưa đọc được chữ bài của bạn trên trang: tìm trong các bài bạn đã đăng (đã lưu).
+    const { postHistory = [] } = await chrome.storage.local.get({ postHistory: [] });
+    myPost = (postHistory.find((p) => p.id && p.id === String(msg.myPostId)) || {}).text || "";
+  }
+  if (onMyPost && !myPost && msg.replyTo) myPost = await parentText(msg.replyTo);
+  const urls = (a) => (Array.isArray(a) ? a : []).filter((u) => /^https:\/\/pbs\.twimg\.com\//.test(u)).slice(0, 4);
   history.push({
+    images: urls(msg.images),
+    imageDesc,
+    myImages: urls(msg.myImages),
+    id: String(msg.id || ""),
     post: String(msg.post || "").slice(0, 600),
     author: msg.author || "",
     reply: reply.slice(0, 500),
     suggested: msg.suggested || "",
-    edited: reply.replace(/\s+/g, " ") !== String(msg.suggested || "").replace(/\s+/g, " ").trim(),
+    own: !msg.suggested, // bạn tự gõ, không dùng gợi ý
+    edited: !!msg.suggested && reply.replace(/\s+/g, " ") !== String(msg.suggested || "").replace(/\s+/g, " ").trim(),
+    replyTo: String(msg.replyTo || ""),
+    onMyPost, // trả lời bình luận dưới bài của chính bạn
+    myPost: myPost.slice(0, 600),
+    myPostId: onMyPost ? String(msg.myPostId || "") : "",
     ts: Date.now()
   });
   await chrome.storage.local.set({ history: history.slice(-HISTORY_MAX) });
+  saveToDisk("reply", history[history.length - 1]);
+}
+
+// ---------- Bài của các page Facebook bạn chọn (fbsave.js lưu lúc bạn lướt) ----------
+// Dùng làm mẫu phong cách khi gợi ý bài đăng và làm dữ liệu huấn luyện kiểu "viết bài theo phong cách page hay".
+const FB_MAX = 5000;
+const fbHash = (t) => {
+  let h = 2166136261;
+  for (const ch of String(t).replace(/\s+/g, " ").trim()) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
+  return h.toString(36);
+};
+let fbQueue = Promise.resolve(); // ghi lần lượt, không mất bài khi nhiều bài tới cùng lúc
+function saveFbPost(msg) {
+  const job = fbQueue.then(async () => {
+    const text = String(msg.text || "").trim().slice(0, 5000);
+    const { fbPosts = [] } = await chrome.storage.local.get({ fbPosts: [] });
+    if (text.length < 20) return { added: false, total: fbPosts.length };
+    const id = fbHash(text);
+    if (fbPosts.some((p) => p.id === id)) return { added: false, total: fbPosts.length };
+    const it = { id, page: String(msg.page || ""), text, url: String(msg.url || ""), ts: Date.now(), status: "new" };
+    fbPosts.push(it);
+    await chrome.storage.local.set({ fbPosts: fbPosts.slice(-FB_MAX) });
+    fbToDisk(it);
+    return { added: true, total: Math.min(fbPosts.length, FB_MAX) };
+  });
+  fbQueue = job.catch(() => {});
+  return job;
+}
+// D:\MMO\X-data\fb\<page>\<ngày> <giờ> <mã>.txt
+// ---------- Kho bài Facebook: xem, kiểm tra trùng, đưa vào dữ liệu train ----------
+// status: "new" (chờ duyệt) | "train" (đã vào dữ liệu train, có sẵn p.train đúng định dạng) | "dup" (trùng) | "skip" (bỏ)
+const fbStatus = (p) => p.status || "new";
+// Chữ để so trùng: thường, bỏ link, emoji, dấu câu, khoảng trắng thừa.
+const fbNorm = (t) =>
+  String(t || "")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+const fbShingles = (t) => {
+  const w = fbNorm(t).split(" ").filter(Boolean);
+  const out = new Set();
+  for (let i = 0; i + 2 < w.length; i++) out.add(`${w[i]} ${w[i + 1]} ${w[i + 2]}`);
+  if (!out.size && w.length) out.add(w.join(" "));
+  return out;
+};
+// Độ giống: phần chung / bài ngắn hơn (bắt được cả bản bị cắt "Xem thêm" với bản đầy đủ).
+function fbSim(a, b) {
+  if (!a.size || !b.size) return 0;
+  const [s, l] = a.size <= b.size ? [a, b] : [b, a];
+  let inter = 0;
+  s.forEach((x) => l.has(x) && inter++);
+  return inter / s.size;
+}
+const FB_DUP_SIM = 0.8;
+// Kiểm tra trùng cho các bài chờ duyệt: so với bài đã vào train và các bài chờ duyệt lưu trước nó.
+// Trong hai bài trùng nhau, giữ bản dài hơn (thường là bản đầy đủ).
+function fbDupCheck(fbPosts) {
+  const kept = fbPosts.filter((p) => fbStatus(p) === "train").map((p) => ({ p, sh: fbShingles(p.train ? p.train.assistant : p.text) }));
+  let dups = 0;
+  for (const p of fbPosts) {
+    const st = fbStatus(p);
+    if (st !== "new" && st !== "dup") continue;
+    const sh = fbShingles(p.text);
+    let best = null;
+    for (const k of kept) {
+      const sim = fbSim(sh, k.sh);
+      if (sim >= FB_DUP_SIM && (!best || sim > best.sim)) best = { k, sim };
+    }
+    if (best && fbStatus(best.k.p) === "new" && p.text.length > best.k.p.text.length) {
+      // bản này dài hơn bản chờ duyệt kia: bản kia mới là bản trùng
+      Object.assign(best.k.p, { status: "dup", dupOf: p.id, sim: Math.round(best.sim * 100) });
+      best.k.p = p;
+      best.k.sh = sh;
+      Object.assign(p, { status: "new", dupOf: "", sim: 0 });
+      dups++;
+    } else if (best) {
+      Object.assign(p, { status: "dup", dupOf: best.k.p.id, sim: Math.round(best.sim * 100) });
+      dups++;
+    } else {
+      Object.assign(p, { status: "new", dupOf: "", sim: 0 });
+      kept.push({ p, sh });
+    }
+  }
+  return dups;
+}
+// Làm sạch trước khi đưa vào train: bỏ link, dòng toàn hashtag ở cuối, chữ "Xem bản dịch", dòng trống thừa.
+function fbClean(t) {
+  let s = String(t || "")
+    .replace(/\r/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[ \t]*(xem bản dịch|see translation|… xem thêm|\.\.\. xem thêm|xem thêm|see more|ẩn bớt|see less)[ \t]*$/gim, "");
+  const lines = s.split("\n").map((x) => x.replace(/[ \t]+/g, " ").trim());
+  while (lines.length && (!lines[lines.length - 1] || /^(#\S+\s*)+$/.test(lines[lines.length - 1]))) lines.pop();
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+// Đưa các bài (ids) vào dữ liệu train: kiểm tra trùng lần nữa, làm sạch, lưu sẵn đúng định dạng {user, assistant}.
+async function fbApprove(ids, edits) {
+  const job = fbQueue.then(async () => {
+    const { fbPosts = [] } = await chrome.storage.local.get({ fbPosts: [] });
+    const want = new Set(ids || []);
+    for (const p of fbPosts) if (edits && edits[p.id] != null) p.text = String(edits[p.id]).trim();
+    fbDupCheck(fbPosts);
+    const res = { added: 0, dup: 0, short: 0 };
+    const trainSh = fbPosts.filter((p) => fbStatus(p) === "train").map((p) => fbShingles(p.train.assistant));
+    for (const p of fbPosts) {
+      if (!want.has(p.id) || fbStatus(p) === "train") continue;
+      if (fbStatus(p) === "dup") {
+        res.dup++;
+        continue;
+      }
+      const clean = fbClean(p.text).slice(0, 1500);
+      if (clean.length < 40) {
+        res.short++;
+        continue;
+      }
+      const sh = fbShingles(clean);
+      if (trainSh.some((x) => fbSim(sh, x) >= FB_DUP_SIM)) {
+        res.dup++;
+        continue;
+      }
+      p.status = "train";
+      p.train = { user: fbPrompt(clean), assistant: clean };
+      p.trainAt = Date.now();
+      trainSh.push(sh);
+      res.added++;
+    }
+    await chrome.storage.local.set({ fbPosts });
+    return res;
+  });
+  fbQueue = job.catch(() => {});
+  return job;
+}
+async function fbUpdate(ids, patchFn) {
+  const job = fbQueue.then(async () => {
+    const { fbPosts = [] } = await chrome.storage.local.get({ fbPosts: [] });
+    const want = new Set(ids || []);
+    const out = patchFn(fbPosts, want);
+    await chrome.storage.local.set({ fbPosts: out });
+    return { ok: true, total: out.length };
+  });
+  fbQueue = job.catch(() => {});
+  return job;
+}
+
+async function fbToDisk(it) {
+  try {
+    const s = await getSettings();
+    if (!s.saveToDisk) return;
+    const { day, time, file } = vnStamp(it.ts);
+    const lines = [`Page: ${it.page}`, `Lưu lúc: ${day} ${time} (giờ VN)`, it.url ? `Link: ${it.url}` : "", "", it.text].filter((x, i) => x || i > 2);
+    await chrome.runtime.sendNativeMessage(SAVER, {
+      root: /^([A-Za-z]:[\\/]|\\\\)/.test(s.diskFolder || "") ? s.diskFolder : DEFAULTS.diskFolder,
+      dir: `fb/${safeName(it.page.replace(/^id:/, "id-"))}`,
+      files: [{ name: `${day} ${file} ${it.id}.txt`, text: "\ufeff" + lines.join("\r\n") + "\r\n" }],
+      images: []
+    });
+  } catch (e) {
+    console.warn("[X Gợi Ý] lưu bài Facebook ra máy lỗi:", e.message);
+  }
+}
+// Chọn vài bài mẫu hợp chủ đề (giống chữ nhất), thêm vài bài ngẫu nhiên cho đa dạng.
+function pickStylePosts(fbPosts, topic, k = 3, minLen = 40) {
+  const ok = (fbPosts || []).filter((p) => p.text && p.text.length >= minLen && !["dup", "skip"].includes(fbStatus(p)));
+  const approved = ok.filter((p) => fbStatus(p) === "train");
+  const list = approved.length >= k ? approved : ok;
+  if (!list.length) return [];
+  const cur = words(topic || "");
+  const scored = list.map((p) => {
+    const w = words(p.text.slice(0, 600));
+    let inter = 0;
+    w.forEach((x) => cur.has(x) && inter++);
+    return { p, score: inter / (Math.sqrt(w.size * cur.size) || 1) + Math.random() * 0.05 };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const out = scored.slice(0, Math.max(1, k - 1)).map((x) => x.p);
+  while (out.length < Math.min(k, list.length)) {
+    const r = list[Math.floor(Math.random() * list.length)];
+    if (!out.includes(r)) out.push(r);
+  }
+  return out;
+}
+
+// Bài mẫu page cho bảng Gợi ý bài. Chế độ "Phong cách page Facebook": nhiều mẫu hơn (8), lấy cả câu nói ngắn,
+// chọn theo ý bạn gõ; bài dài nên cho model viết dài hơn.
+async function stylePostsFor(msg) {
+  const { fbPosts = [] } = await chrome.storage.local.get({ fbPosts: [] });
+  if (!msg.fbStyle) return pickStylePosts(fbPosts, msg.topic || msg.text);
+  msg.length = "chuyện dài"; // chỉ để nới giới hạn độ dài trả về
+  return pickStylePosts(fbPosts, msg.extraHint || "", 8, 15);
+}
+
+// ---------- Lưu từng bài / câu trả lời ra máy: D:\MMO\X-data\<ngày>\<giờ> ...\ ----------
+// Ghi qua chương trình nhỏ native/xcs_saver.cjs (Native Messaging): ghi thẳng ra ổ đĩa, không có hộp thoại "Save as".
+const safeName = (x) =>
+  String(x || "").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40).replace(/[. ]+$/, "");
+const vnStamp = (ts) => {
+  const iso = new Date(ts + 7 * 3600e3).toISOString();
+  return { day: iso.slice(0, 10), time: iso.slice(11, 19), file: iso.slice(11, 19).replace(/:/g, "-") };
+};
+// Ảnh của X: lấy bản to nhất thay vì bản nhỏ đang hiện.
+function bigImg(u) {
+  try {
+    const x = new URL(u);
+    if (x.pathname.startsWith("/media/")) {
+      const fmt = x.searchParams.get("format") || (x.pathname.match(/\.(jpe?g|png|webp)$/i) || [])[1] || "jpg";
+      return { url: `${x.origin}${x.pathname.replace(/\.(jpe?g|png|webp)$/i, "")}?format=${fmt}&name=large`, ext: fmt.replace("jpeg", "jpg") };
+    }
+    return { url: x.href, ext: (x.pathname.match(/\.(jpe?g|png|webp)$/i) || [, "jpg"])[1].replace("jpeg", "jpg") };
+  } catch (_) {
+    return { url: u, ext: "jpg" };
+  }
+}
+const SAVER = "com.xcs.saver";
+async function saveToDisk(kind, it) {
+  try {
+    const s = await getSettings();
+    if (!s.saveToDisk || !it) return;
+    const { day, time, file } = vnStamp(it.ts || Date.now());
+    const handle = kind === "reply" ? ((it.author || "").match(/@\w+/) || [""])[0] : "";
+    const lines = [`Thời gian: ${day} ${time} (giờ VN)`];
+    if (kind === "reply") {
+      if (it.replyTo) lines.push(`Bài gốc: https://x.com/i/status/${it.replyTo}`);
+      if (it.id) lines.push(`Câu trả lời của tôi: https://x.com/i/status/${it.id}`);
+      if (it.onMyPost) {
+        if (it.myPostId) lines.push(`Bài của tôi: https://x.com/i/status/${it.myPostId}`);
+        lines.push("", "--- Bài của tôi ---", it.myPost || "(không lấy được chữ bài của tôi)");
+      }
+      lines.push("", `--- ${it.onMyPost ? "Bình luận" : "Bài"} của ${it.author || "(không rõ)"} ---`, it.post || "(không lấy được chữ của bài)");
+      if (it.imageDesc) lines.push(`(Ảnh: ${it.imageDesc})`);
+      lines.push("", "--- Tôi trả lời ---", it.reply);
+    } else {
+      if (it.id) lines.push(`Link: https://x.com/i/status/${it.id}`);
+      if (it.topic) lines.push(`Chủ đề: ${it.topic}`);
+      lines.push("", "--- Bài tôi đăng ---", it.text);
+    }
+    if (it.suggested && it.suggested !== (it.reply || it.text)) lines.push("", "--- Gợi ý AI ban đầu ---", it.suggested);
+    const images = [
+      ...(it.images || []).map((u, i) => ({ u, name: `anh-bai-${i + 1}` })),
+      ...(it.myImages || []).map((u, i) => ({ u, name: `anh-cua-toi-${i + 1}` }))
+    ].map(({ u, name }) => {
+      const b = bigImg(u);
+      return { url: b.url, name: `${name}.${b.ext}` };
+    });
+    const res = await chrome.runtime.sendNativeMessage(SAVER, {
+      root: /^([A-Za-z]:[\\/]|\\\\)/.test(s.diskFolder || "") ? s.diskFolder : DEFAULTS.diskFolder, // tên cũ kiểu "X-data" thì dùng mặc định
+      dir: `${day}/${file} ${kind === "reply" ? (it.onMyPost ? "tra-loi-binh-luan" : "tra-loi") : "bai-dang"}${handle ? " " + safeName(handle) : ""}`,
+      files: [
+        { name: "noi-dung.txt", text: "\ufeff" + lines.join("\r\n") + "\r\n" }, // BOM để Notepad nhận đúng tiếng Việt
+        { name: "info.json", text: JSON.stringify({ kind, ...it, time: `${day} ${time}` }, null, 2) }
+      ],
+      images
+    });
+    if (!res || !res.ok) throw new Error((res && res.error) || "không rõ lỗi");
+    chrome.storage.local.set({ diskSave: { ok: true, at: Date.now(), dir: res.dir } });
+  } catch (e) {
+    const msg = /not found|host/i.test(e.message)
+      ? "Chưa cài chương trình lưu. Chạy: powershell -ExecutionPolicy Bypass -File native\\cai-dat.ps1 (trong thư mục extension)"
+      : e.message;
+    console.warn("[X Gợi Ý] lưu ra máy lỗi:", e.message);
+    chrome.storage.local.set({ diskSave: { ok: false, at: Date.now(), error: msg } });
+  }
 }
 
 // ---------- Viết bài đăng mới (theo chủ đề, thời điểm, con người, địa điểm) ----------
-const POST_HISTORY_MAX = 100;
+const POST_HISTORY_MAX = 5000;
 const POST_SCHEMA = {
   type: "object",
   properties: {
@@ -272,8 +649,17 @@ async function savePost(msg) {
   const text = String(msg.text || "").trim();
   if (!text) return;
   const { postHistory = [] } = await chrome.storage.local.get({ postHistory: [] });
-  postHistory.push({ text: text.slice(0, 1000), topic: String(msg.topic || "").slice(0, 200), ts: Date.now() });
+  const item = {
+    text: text.slice(0, 4000),
+    topic: String(msg.topic || "").slice(0, 200),
+    suggested: String(msg.suggested || "").slice(0, 4000),
+    id: String(msg.id || ""),
+    myImages: (Array.isArray(msg.myImages) ? msg.myImages : []).filter((u) => /^https:\/\/pbs\.twimg\.com\//.test(u)).slice(0, 4),
+    ts: Date.now()
+  };
+  postHistory.push(item);
   await chrome.storage.local.set({ postHistory: postHistory.slice(-POST_HISTORY_MAX) });
+  saveToDisk("post", item);
 }
 
 // Model nhỏ hay tự thêm hashtag, hoặc tách hashtag thành "bài" riêng: bỏ đi (trừ khi bạn xin hashtag).
@@ -491,6 +877,10 @@ function buildPostPrompt(args) {
     lang,
     ...habit,
     past.length ? "\nBÀI NGƯỜI DÙNG ĐÃ ĐĂNG TRƯỚC ĐÂY (bắt giọng, KHÔNG lặp lại ý):\n" + past.map((x) => `• ${x.text.replace(/\s+/g, " ")}`).join("\n") : "",
+    (settings.stylePosts || []).length
+      ? "\nBÀI MẪU TỪ PAGE VIẾT HAY mà người dùng thích. Học cách mở bài gây tò mò, nhịp câu, cách kể chi tiết đời thường, cách kết. TUYỆT ĐỐI KHÔNG chép câu chữ, ý hay câu chuyện của họ; bài viết ra vẫn là giọng và chuyện của người dùng:\n" +
+        settings.stylePosts.map((x) => `• ${x.text.replace(/\s+/g, " ").slice(0, 450)}`).join("\n")
+      : "",
     "",
     'Chỉ trả về JSON đúng dạng {"context": "...", "suggestions": ["...", "..."], "images": ["...", "..."]}, không thêm chữ nào khác.',
     'Trong đó "context" là MỘT câu ngắn tiếng Việt nói góc viết bạn chọn, ví dụ: "10 giờ tối thứ Sáu ở Hà Nội, dân văn phòng mệt nhưng chưa muốn ngủ, mở bằng lời thú nhận + hỏi A/B".',
@@ -525,8 +915,42 @@ function buildPostPrompt(args) {
   return { system, user };
 }
 
+// Chế độ "Phong cách page Facebook": tách hẳn khỏi các lựa chọn của bảng (con người, chủ đề, giọng, cách gõ của bạn...).
+// Chỉ học từ các bài page Facebook đã lưu (ưu tiên bài đã duyệt vào train). Ô "Thêm ý" = ý / chủ đề muốn viết (tuỳ chọn).
+function buildFbStylePrompt(args) {
+  const { settings, extraHint } = args;
+  const ex = settings.stylePosts || [];
+  const system = [
+    `Bạn viết BÀI ĐĂNG MẠNG XÃ HỘI MỚI theo đúng phong cách của một page Facebook viết hay. Viết đúng ${settings.count} bài.`,
+    "",
+    "HỌC TỪ CÁC BÀI MẪU BÊN DƯỚI: cách mở bài, độ dài, nhịp câu, cách xuống dòng, cách xưng hô với người đọc, cách kết, mức dùng emoji và chữ in hoa.",
+    "Bài mẫu có cả câu nói ngắn (quote) lẫn bài dài: các bài viết ra cũng nên trộn dài ngắn như vậy.",
+    "",
+    "QUY TẮC:",
+    "1. TUYỆT ĐỐI KHÔNG chép câu chữ, ý chính hay câu chuyện của bài mẫu. Ý mới, ví dụ mới, câu mới.",
+    "2. Không bịa tin tức, số liệu, tên bệnh viện, tên người thật, kết quả nghiên cứu. Không viết kiểu \"Theo báo...\".",
+    "3. Không chính trị, tôn giáo, thù ghét; không nói xấu người hay thương hiệu cụ thể.",
+    "4. Không tag, không link, không hashtag (trừ khi yêu cầu thêm bảo có).",
+    "5. Mỗi bài một ý và một cách mở bài khác nhau.",
+    "6. ĐỘ DÀI: bài vừa đến dài, mỗi bài 80–250 chữ, chia 2–5 đoạn như bài mẫu dài. Nhiều nhất 1 bài là câu nói ngắn. TUYỆT ĐỐI không trả về các câu một dòng kiểu tiêu đề.",
+    "",
+    ex.length
+      ? `BÀI MẪU CỦA PAGE (${ex.length} bài):\n` + ex.map((x, i) => `--- Bài ${i + 1} ---\n${x.text.trim().slice(0, 900)}`).join("\n")
+      : "(Chưa có bài mẫu: viết kiểu page truyền cảm hứng, tư duy sống, giọng chín chắn, gần gũi.)",
+    "",
+    'Chỉ trả về JSON đúng dạng {"context": "...", "suggestions": ["...", "..."], "images": ["...", "..."]}, không thêm chữ nào khác.',
+    '"context": MỘT câu ngắn tiếng Việt nói các ý bạn chọn. "images": mảng cùng độ dài, mỗi phần tử là ảnh minh hoạ bằng TIẾNG ANH dạng "từ khoá | mô tả 8-15 từ", không có chữ trong ảnh.'
+  ].join("\n");
+  const user = [
+    `Thời điểm hiện tại: ${nowContext()}`,
+    extraHint ? `Ý / chủ đề muốn viết: ${extraHint}` : "Ý / chủ đề: bạn tự chọn, hợp với page và thời điểm hiện tại."
+  ].join("\n");
+  return { system, user };
+}
+
 function buildPrompt(args) {
   if (args.mode === "raw") return { system: args.system, user: args.user }; // Content Studio tự viết prompt
+  if (args.mode === "post" && args.fbStyle) return buildFbStylePrompt(args);
   if (args.mode === "post") return buildPostPrompt(args);
   const { text, author, hasMedia, settings, extraHint, imageCount = 0 } = args;
   const langRule =
@@ -595,7 +1019,27 @@ function buildPrompt(args) {
     imageCount
       ? `Bài có ${imageCount} ảnh, đính kèm bên dưới (ảnh bìa nếu là video).`
       : `Bài có ảnh/video: ${hasMedia ? "có (bạn không xem được ảnh, chỉ đọc được chữ)" : "không"}`,
-    "Nội dung bài:",
+    args.onMyPost
+      ? [
+          "ĐÂY LÀ BÌNH LUẬN DƯỚI BÀI CỦA CHÍNH NGƯỜI DÙNG. Người dùng là chủ bài, đáp lại người bình luận (khác hẳn đi bình luận bài người khác).",
+          ...(questionOf(text)
+            ? [
+                `Người bình luận ĐANG HỎI chủ bài: "${questionOf(text)}"`,
+                "Chủ bài phải TRẢ LỜI THẬT câu hỏi đó, như đang nói chuyện với bạn: 3-12 chữ, nói cụ thể mình làm gì / nghĩ gì, có thể thêm hihi, haha, nè, á cho tự nhiên. Có thể hỏi lại ngắn ở cuối.",
+                "Ví dụ: hỏi \"tối nay bạn làm gì để sạc pin vậy?\" → \"Nằm cày phim với ăn vặt thôi á\", \"Đi ngủ sớm cho khỏe hihi\", \"Ra quán cà phê ngồi chill nè, còn bạn?\".",
+                "KHÔNG đáp kiểu \"Dạ vâng ạ\", \"Hihi\", \"Chuẩn luôn\" vì như vậy là không trả lời câu hỏi. Mỗi gợi ý là một câu trả lời khác nhau."
+              ]
+            : [
+                "Người bình luận chỉ chia sẻ / đồng tình, không hỏi gì: chủ bài đáp RẤT NGẮN, 1-4 chữ, kiểu đáp lời, đồng ý, cười, dạ vâng, cảm ơn. Không kể chuyện của mình, không giảng giải, không lặp lại ý người ta.",
+                "Ví dụ đúng giọng: \"Dạ vâng ạ\", \"Ok nhé\", \"Hihi\", \"Hehe\", \"Được thui\", \"Chuẩn luôn\", \"Đúng rồi á\", \"Cảm ơn nha\", \"Dạ đúng ạ\", \"Chuẩn bài\", \"Haha thật\", \"Nhất trí\". Mỗi gợi ý một kiểu khác nhau, có câu chỉ là tiếng cười."
+              ]),
+          "Bài gốc của người dùng:",
+          "<<<",
+          args.myPost && args.myPost.trim() ? args.myPost.trim() : "(không lấy được chữ của bài gốc)",
+          ">>>",
+          "Bình luận cần đáp lại:"
+        ].join("\n")
+      : "Nội dung bài:",
     "<<<",
     text && text.trim() ? text.trim() : "(bài không có chữ)",
     ">>>",
@@ -769,6 +1213,81 @@ async function callGemini(payload, settings) {
   return list;
 }
 
+// ---------- ChatGPT (OpenAI API) ----------
+// Cần API key ở platform.openai.com (trả phí theo lượng dùng, tách riêng với gói ChatGPT Plus).
+const openaiSeesImages = (model) => /gpt-(4o|4\.1|5)|^o[34]|chatgpt/i.test(model || "");
+async function callOpenAI(payload, settings) {
+  const model = settings.openaiModel || DEFAULTS.openaiModel;
+  const imgs = openaiSeesImages(model) ? payload.imgs || [] : [];
+  const { system, user } = buildPrompt({ ...payload, settings, imageCount: imgs.length });
+  const content = imgs.length
+    ? [{ type: "text", text: user }, ...imgs.map((im) => ({ type: "image_url", image_url: { url: `data:${im.mime};base64,${im.data}`, detail: "low" } }))]
+    : user;
+  const reasoning = /^(gpt-5|o\d)/i.test(model); // model có "suy nghĩ": tắt bớt cho nhanh, không cho chỉnh temperature
+  const req = {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content }
+    ],
+    // Model suy nghĩ tính cả phần suy nghĩ vào giới hạn này, nên để rộng.
+    max_completion_tokens: (payload.mode === "raw" ? payload.maxTokens || 2000 : payload.mode === "post" ? (payload.length === "chuyện dài" ? 3200 : 1800) : 1024) + (reasoning ? 2000 : 0),
+    response_format: { type: "json_object" }
+  };
+  if (reasoning) req.reasoning_effort = "minimal";
+  else req.temperature = 1;
+  let res, data;
+  for (let i = 0; i < 4; i++) {
+    res = await fetch(OPENAI_URL, {
+      method: "POST",
+      signal: settings.signal,
+      headers: { "content-type": "application/json", authorization: `Bearer ${settings.openaiKey}` },
+      body: JSON.stringify(req)
+    });
+    data = await res.json().catch(() => ({}));
+    const msg = String(data.error?.message || "");
+    // Model mới / cũ nhận tham số khác nhau: đổi cho hợp rồi gọi lại.
+    if (res.status === 400 && req.reasoning_effort && /reasoning|minimal/i.test(msg)) {
+      if (req.reasoning_effort === "minimal") req.reasoning_effort = "none";
+      else delete req.reasoning_effort;
+      continue;
+    }
+    if (res.status === 400 && "temperature" in req && /temperature/i.test(msg)) {
+      delete req.temperature;
+      continue;
+    }
+    if (res.status === 400 && req.response_format && /response_format|json/i.test(msg)) {
+      delete req.response_format;
+      continue;
+    }
+    if ((res.status === 503 || res.status === 500) && i < 2) {
+      await new Promise((r) => setTimeout(r, 1500));
+      continue;
+    }
+    break;
+  }
+  if (!res.ok) {
+    const msg = String(data.error?.message || "");
+    if (res.status === 401) throw new Error("API key sai hoặc đã bị xoá");
+    if (res.status === 429) {
+      if (/quota|billing/i.test(msg)) {
+        await setCooldown(`openai:${model}`, 3600e3, "hết tiền trong tài khoản API");
+        throw new Error("tài khoản API hết tiền / chưa nạp (platform.openai.com → Billing)");
+      }
+      const wait = Number(res.headers?.get?.("retry-after")) || 20;
+      await setCooldown(`openai:${model}`, wait * 1000, "quá nhiều yêu cầu");
+      throw new Error(`quá nhiều yêu cầu, thử lại sau ${Math.ceil(wait)} giây`);
+    }
+    if (res.status === 404) throw new Error(`không có model ${model}, vào Cài đặt bấm Tải danh sách model rồi chọn lại`);
+    throw new Error(`${msg || `HTTP ${res.status}`}`);
+  }
+  const text = String(data.choices?.[0]?.message?.content || "");
+  if (payload.mode === "raw") return { raw: text };
+  const list = parseSuggestions(text, settings.count);
+  if (!list.length) throw new Error("Không đọc được gợi ý từ phản hồi.");
+  return list;
+}
+
 async function callGroq(payload, settings) {
   const model = settings.groqModel || DEFAULTS.groqModel;
   const imgs = groqSeesImages(model, settings) ? payload.imgs || [] : [];
@@ -889,17 +1408,16 @@ async function warmOllama() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: settings.ollamaModel,
-        messages: [{ role: "user", content: tunedPrompt("", "") }],
+        messages: [], // danh sách rỗng = Ollama chỉ nạp model vào bộ nhớ, không có prompt giả nào
         stream: false,
-        keep_alive: OLLAMA_KEEP,
-        options: { ...TUNED_OPTS, num_predict: 1 }
+        keep_alive: OLLAMA_KEEP
       })
     }).catch(() => {});
     return;
   }
-  const { history = [] } = settings.learn ? await chrome.storage.local.get({ history: [] }) : {};
-  settings.samples = styleSamples(settings, settings.learn ? history : []).slice(0, 8);
-  settings.profile = styleProfile(styleSamples(settings, settings.learn ? history : []));
+  const st = await ollamaStyle(settings);
+  settings.samples = st.samples;
+  settings.profile = st.profile;
   settings.count = Math.min(5, Math.max(3, Number(settings.count) || 4));
   const { system } = buildPrompt({ text: "", settings: { ...settings, stablePrompt: true, examples: [] } });
   const base = (settings.ollamaUrl || DEFAULTS.ollamaUrl).replace(/\/+$/, "");
@@ -915,12 +1433,28 @@ async function warmOllama() {
     })
   }).catch(() => {});
 }
+// Cách gõ (câu mẫu + thống kê) gửi cho Ollama được "chụp" lại và giữ nguyên 12 giờ.
+// Nếu mỗi câu bạn vừa đăng làm phần system đổi đi, Ollama phải đọc lại toàn bộ ~2000 token mỗi lần (chậm ~10 giây).
+// Giữ nguyên thì Ollama dùng lại bộ nhớ đệm, chỉ phải đọc phần bài mới.
+const STYLE_SNAP_MS = 12 * 3600e3;
+async function ollamaStyle(settings) {
+  const { ollamaStyleSnap: snap } = await chrome.storage.local.get({ ollamaStyleSnap: null });
+  const key = `${settings.learn ? 1 : 0}|${String(settings.styleSamples || "").length}`;
+  if (snap && snap.key === key && Date.now() - snap.at < STYLE_SNAP_MS) return snap;
+  const { history = [] } = settings.learn ? await chrome.storage.local.get({ history: [] }) : {};
+  const all = styleSamples(settings, settings.learn ? history : []);
+  const fresh = { key, at: Date.now(), samples: all.slice(0, 8), profile: styleProfile(all) };
+  await chrome.storage.local.set({ ollamaStyleSnap: fresh });
+  return fresh;
+}
+
 async function callOllama(payload, settings) {
   const base = (settings.ollamaUrl || DEFAULTS.ollamaUrl).replace(/\/+$/, "");
   const imgs = settings.ollamaVision && settings.ollamaImages ? payload.imgs || [] : [];
   // Model nhỏ chạy CPU: gửi ít câu mẫu / ví dụ hơn cho nhanh.
   // stablePrompt: phần system giữ y nguyên giữa các lần gọi, Ollama chỉ phải đọc lại phần bài mới.
-  const lite = { ...settings, stablePrompt: true, examples: (settings.examples || []).slice(0, 2), samples: (settings.samples || []).slice(0, 8) };
+  const st = payload.mode === "raw" ? null : await ollamaStyle(settings);
+  const lite = { ...settings, stablePrompt: true, examples: (settings.examples || []).slice(0, 2), samples: st ? st.samples : [], profile: st ? st.profile : settings.profile };
   const { system, user } = buildPrompt({ ...payload, settings: lite, imageCount: imgs.length });
   const userMsg = { role: "user", content: user };
   if (imgs.length) userMsg.images = imgs.map((im) => im.data);
@@ -948,7 +1482,12 @@ async function callOllama(payload, settings) {
                 num_ctx: Math.min(16384, Math.max(4096, Math.ceil(((payload.system || "").length + (payload.user || "").length) / 2.5) + (payload.maxTokens || 1500) + 512))
               }
             : payload.mode === "post"
-            ? { ...OLLAMA_OPTS, num_predict: payload.length === "chuyện dài" ? 2400 : 1000, num_ctx: 8192 } // bài đăng dài hơn bình luận
+            ? {
+                ...OLLAMA_OPTS,
+                num_predict: payload.length === "chuyện dài" ? 2400 : 1000,
+                // Giữ 4096 như bình luận khi đủ chỗ (đổi num_ctx là Ollama phải nạp lại model), chỉ tăng khi prompt quá dài.
+                num_ctx: payload.length === "chuyện dài" || (system.length + user.length) / 2.5 + 1000 > 3900 ? 8192 : OLLAMA_OPTS.num_ctx
+              }
             : OLLAMA_OPTS
       })
     });
@@ -976,27 +1515,223 @@ const TUNED_OPTS = { temperature: 1, top_p: 0.95, num_predict: 48, num_ctx: 1024
 function isTuned(settings) {
   return TUNED_RE.test(settings.ollamaModel || "");
 }
-function tunedPrompt(post, author) {
+function tunedPrompt(post, author, imageDesc, own) {
   const p = String(post || "").replace(/\s+/g, " ").trim().slice(0, 600);
-  return `Viết 1 bình luận trả lời bài X này theo giọng của tôi.\nTác giả: ${author || "(không rõ)"}\nBài: ${p || "(bài không có chữ)"}`;
+  const img = String(imageDesc || "").trim();
+  if (own && own.onMyPost) {
+    // Kiểu riêng cho "đáp lại bình luận dưới bài của tôi": model học cách làm chủ bài nói chuyện với người bình luận.
+    const mp = String(own.myPost || "").replace(/\s+/g, " ").trim().slice(0, 400);
+    return `Đáp lại bình luận dưới bài của tôi theo giọng của tôi.\nBài của tôi: ${mp || "(không rõ)"}\nNgười bình luận: ${author || "(không rõ)"}\nBình luận: ${p || "(không có chữ)"}${img ? `\nẢnh: ${img}` : ""}`;
+  }
+  return `Viết 1 bình luận trả lời bài X này theo giọng của tôi.\nTác giả: ${author || "(không rõ)"}\nBài: ${p || "(bài không có chữ)"}${img ? `\nẢnh: ${img}` : ""}`;
+}
+// Kiểu thứ ba cho model riêng: viết bài đăng theo phong cách page hay. "Ý mở đầu" là câu đầu của bài,
+// model học cách từ một ý mở đầu viết thành cả bài theo nhịp, cách kể của page đó.
+function fbPrompt(text) {
+  const first = String(text).split(/(?<=[.!?…])\s+|\n+/)[0] || "";
+  const hook = first.split(/\s+/).slice(0, 15).join(" ");
+  return `Viết bài đăng mạng xã hội theo phong cách page viết hay.\nÝ mở đầu: ${hook}`;
+}
+// Chỉ bài đã được duyệt vào train (bấm "Đưa vào dữ liệu train" trong trang Dữ liệu bài viết).
+function fbTrainLines(fbPosts) {
+  return (fbPosts || [])
+    .filter((p) => fbStatus(p) === "train" && p.train)
+    .map((p) =>
+      JSON.stringify({
+        messages: [
+          { role: "user", content: p.train.user },
+          { role: "assistant", content: fbClean(p.train.assistant) } // làm sạch lại lúc xuất (bài cũ còn dính chữ "Ẩn bớt" của nút Facebook)
+        ]
+      })
+    );
 }
 // Dữ liệu huấn luyện: mỗi dòng một cặp bài -> câu bạn đã đăng (định dạng JSONL).
 function trainLines(history) {
   return (history || [])
-    .filter((h) => h.reply && String(h.reply).trim())
+    .filter((h) => h.reply && String(h.reply).trim() && (String(h.post || "").trim() || h.imageDesc))
     .map((h) =>
       JSON.stringify({
         messages: [
-          { role: "user", content: tunedPrompt(h.post, h.author) },
+          { role: "user", content: tunedPrompt(h.post, h.author, h.imageDesc, h) },
           { role: "assistant", content: String(h.reply).trim() }
         ]
       })
     );
 }
 
+// ---------- Mô tả ảnh cho model riêng (xcs- không xem được ảnh) ----------
+// Một model xem được ảnh viết 1 câu mô tả, model riêng đọc câu đó cùng chữ của bài.
+// Câu mô tả được nhớ lại (theo link ảnh) và lưu kèm câu trả lời để lần huấn luyện sau model học cả phản ứng với ảnh.
+const DESC_PROMPT =
+  "Mô tả ảnh bằng MỘT câu tiếng Việt ngắn (tối đa 25 từ): trong ảnh có gì (người, vật, món ăn, con vật, nơi chốn, chữ viết trong ảnh, màu sắc, không khí). Chỉ mô tả, không bình luận, không mở đầu bằng \"Ảnh\" hay \"Bức ảnh\".";
+const imgKey = (urls) =>
+  (urls || [])
+    .slice(0, 4)
+    .map((u) => {
+      try {
+        const x = new URL(u);
+        return x.origin + x.pathname;
+      } catch (_) {
+        return String(u || "");
+      }
+    })
+    .join("|");
+const descMem = new Map();
+async function cachedDesc(urls) {
+  const key = imgKey(urls);
+  if (!key) return "";
+  if (descMem.has(key)) return descMem.get(key);
+  const { imgDesc = {} } = await chrome.storage.local.get({ imgDesc: {} });
+  return (imgDesc[key] && imgDesc[key].d) || "";
+}
+async function rememberDesc(urls, d) {
+  const key = imgKey(urls);
+  descMem.set(key, d);
+  const { imgDesc = {} } = await chrome.storage.local.get({ imgDesc: {} });
+  imgDesc[key] = { d, at: Date.now() };
+  const keys = Object.keys(imgDesc);
+  if (keys.length > 1500) keys.sort((a, b) => imgDesc[a].at - imgDesc[b].at).slice(0, keys.length - 1500).forEach((k) => delete imgDesc[k]);
+  await chrome.storage.local.set({ imgDesc });
+}
+const cleanDesc = (t) =>
+  String(t || "").replace(/<think>[\s\S]*?<\/think>/g, "").replace(/\s+/g, " ").replace(/^["“']|["”']$/g, "").trim().slice(0, 300);
+async function describeGroq(imgs, settings) {
+  if (!settings.groqKey) return "";
+  const vis = settings.groqVisionModels || [];
+  const model = groqSeesImages(settings.groqModel, settings)
+    ? settings.groqModel
+    : vis.find((m) => /scout|maverick/i.test(m)) || vis[0] || "meta-llama/llama-4-scout-17b-16e-instruct";
+  if (await getCooldown(`groq:${model}`)) return "";
+  const req = {
+    model,
+    max_tokens: 120,
+    temperature: 0.3,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: DESC_PROMPT }, ...imgs.map((im) => ({ type: "image_url", image_url: { url: `data:${im.mime};base64,${im.data}` } }))]
+      }
+    ]
+  };
+  if (/qwen3/i.test(model)) req.reasoning_effort = "none";
+  const res = await fetch(GROQ_URL, {
+    method: "POST",
+    signal: AbortSignal.timeout(10000),
+    headers: { "content-type": "application/json", authorization: `Bearer ${settings.groqKey}` },
+    body: JSON.stringify(req)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error?.message || `Groq HTTP ${res.status}`);
+  return cleanDesc(data.choices?.[0]?.message?.content);
+}
+async function describeOllama(imgs, settings) {
+  const list = (settings.ollamaModelList || []).filter((m) => m && m.vision && !TUNED_RE.test(m.id || ""));
+  const model = (list.find((m) => /^gemma3:4b/.test(m.id)) || list[0] || {}).id;
+  if (!model) return "";
+  const base = (settings.ollamaUrl || DEFAULTS.ollamaUrl).replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/chat`, {
+    method: "POST",
+    signal: AbortSignal.timeout(90000),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      stream: false,
+      keep_alive: OLLAMA_KEEP,
+      messages: [{ role: "user", content: DESC_PROMPT, images: imgs.map((im) => im.data) }],
+      options: { temperature: 0.3, num_predict: 80, num_ctx: OLLAMA_OPTS.num_ctx }
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Ollama HTTP ${res.status}`);
+  return cleanDesc(data.message?.content);
+}
+// local: cho phép dùng model trên máy khi Groq không được (chậm hơn, phải đổi model).
+async function describeImages(urls, settings, { local = true } = {}) {
+  urls = (urls || []).filter((u) => /^https:\/\/pbs\.twimg\.com\//.test(u)).slice(0, 4);
+  if (!urls.length) return "";
+  const hit = await cachedDesc(urls);
+  if (hit) return hit;
+  const imgs = await loadImages(urls);
+  if (!imgs.length) return "";
+  let d = "";
+  try {
+    d = await describeGroq(imgs, settings);
+  } catch (e) {
+    console.warn("[X Gợi Ý] Groq không mô tả được ảnh:", e.message);
+  }
+  if (!d && local) {
+    try {
+      d = await describeOllama(imgs, settings);
+    } catch (e) {
+      console.warn("[X Gợi Ý] Ollama không mô tả được ảnh:", e.message);
+    }
+  }
+  if (d) await rememberDesc(urls, d);
+  return d;
+}
+
+function ollamaBaseModel(s) {
+  const ids = (s.ollamaModelList || []).map((m) => m.id || m.name || m).filter((id) => typeof id === "string" && !TUNED_RE.test(id));
+  return ids.find((id) => /^gemma3:4b/.test(id)) || ids[0] || "";
+}
+
+// ---------- Prompt dạng JSON để dán sang AI khác (ChatGPT, Gemini web...) ----------
+// Giống hệt prompt extension gửi cho AI trên mạng: cùng quy tắc, cùng câu mẫu giọng bạn, cùng lựa chọn.
+const POST_PARAM_KEYS = ["persona", "style", "topic", "place", "when", "mood", "tone", "goal", "hook", "strategy", "cta", "length", "lang", "image"];
+async function buildPromptJson(msg) {
+  const settings = await getSettings();
+  const isPost = msg.mode === "post";
+  const { history = [] } = settings.learn ? await chrome.storage.local.get({ history: [] }) : {};
+  if (settings.learn && !isPost) settings.examples = pickExamples(history, msg.text, 4, msg.onMyPost);
+  if (isPost) settings.pastPosts = (await chrome.storage.local.get({ postHistory: [] })).postHistory;
+  if (isPost) settings.stylePosts = await stylePostsFor(msg);
+  settings.samples = styleSamples(settings, settings.learn ? history : []);
+  settings.profile = styleProfile(settings.samples);
+  settings.count = Math.min(5, Math.max(3, Number(settings.count) || 4));
+  const images = (msg.images || []).map((u) => bigImg(u).url);
+  const imageDesc = isPost ? "" : await cachedDesc(msg.images);
+  // Ảnh: đưa link trong "images" (AI khác mở link, hoặc bạn đính kèm ảnh) nên dặn AI là có ảnh để xem.
+  const { system, user } = buildPrompt({ ...msg, settings, imageCount: isPost ? 0 : images.length });
+  const lines = (t) => String(t || "").split("\n").map((x) => x.trimEnd()).filter((x, i, a) => x || (a[i - 1] && a[i - 1].trim()));
+  const params = msg.fbStyle
+    ? { mode: "Phong cách page Facebook (bỏ qua mọi lựa chọn khác)" }
+    : isPost
+    ? Object.fromEntries(POST_PARAM_KEYS.map((k) => [k, msg[k]]).filter(([, v]) => (Array.isArray(v) ? v.length : v)))
+    : { author: msg.author || "", post: msg.text || "", has_media: !!msg.hasMedia };
+  if (msg.extraHint) params.extra_request = msg.extraHint;
+  params.count = settings.count;
+  params.language = isPost ? params.lang || "tiếng Việt" : settings.language;
+  if (!isPost) params.tone = settings.tone;
+  return {
+    task: isPost ? "Viết gợi ý bài đăng X (Twitter)" : "Viết gợi ý bình luận trả lời một bài X (Twitter)",
+    how_to_use: isPost
+      ? "Làm theo system_instructions như lời dặn hệ thống, dùng user_message làm yêu cầu. Chỉ trả về chữ của các bài viết theo output_format."
+      : "Làm theo system_instructions như lời dặn hệ thống, dùng user_message làm yêu cầu. Trả về đúng JSON mà system_instructions yêu cầu." +
+        (images.length ? " Nếu xem được ảnh thì mở các link trong images (hoặc người dùng sẽ đính kèm ảnh)." : ""),
+    params,
+    ...(images.length ? { images } : {}),
+    ...(imageDesc ? { image_description: imageDesc } : {}),
+    // Bài đăng dán sang AI chat: bỏ phần "chỉ trả JSON" + ảnh (dành cho extension), chỉ xin chữ của bài.
+    system_instructions: isPost
+      ? lines(system).filter((l) => !/^(Chỉ trả về JSON|Trong đó "context"|"images":|Ví dụ: "[^"]*\|)/.test(l))
+      : lines(system),
+    ...(isPost
+      ? {
+          output_format: [
+            `Chỉ trả về đúng ${settings.count} bài viết, sẵn để copy đăng lên X.`,
+            'Giữa hai bài là một dòng chỉ có "---".',
+            "Không đánh số, không tiêu đề, không ngoặc kép, không mô tả ảnh, không giải thích, không JSON, không câu hỏi lại người dùng.",
+            'Nếu người dùng nhắn "viết thêm" thì viết thêm bài mới khác hẳn các bài trước, cùng yêu cầu và cùng cách trình bày.'
+          ]
+        }
+      : {}),
+    user_message: lines(user)
+  };
+}
+
 async function callOllamaTuned(payload, settings) {
   const base = (settings.ollamaUrl || DEFAULTS.ollamaUrl).replace(/\/+$/, "");
-  const content = tunedPrompt(payload.text, payload.author);
+  const content = tunedPrompt(payload.text, payload.author, payload.imageDesc, payload);
   const out = [];
   // Mỗi lần gọi ra 1 câu. Prompt giống nhau nên từ lần 2 Ollama không phải đọc lại, chỉ tốn phần viết.
   for (let i = 0; i < settings.count * 2 && out.length < settings.count; i++) {
@@ -1024,7 +1759,86 @@ async function callOllamaTuned(payload, settings) {
     if (t && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
   }
   if (!out.length) throw new Error("Model riêng không trả lời được.");
-  out.context = "model riêng đã học giọng bạn";
+  out.context = "model riêng đã học giọng bạn" + (payload.imageDesc ? ` · ảnh: ${payload.imageDesc}` : "");
+  return out;
+}
+
+// Chế độ "Phong cách page Facebook" với model riêng (xcs-): dùng đúng định dạng lúc huấn luyện
+// ("Viết bài đăng... Ý mở đầu: ..."). Ý mở đầu lấy từ ô "Thêm ý"; để trống thì bốc ngẫu nhiên vài câu mở.
+const FB_HOOKS = [
+  "Người trưởng thành là người",
+  "Tiền bạc không mua được",
+  "Có những lúc ta phải học cách",
+  "Đừng bao giờ so sánh mình với",
+  "Sống tử tế không có nghĩa là",
+  "Người càng giỏi thì càng",
+  "Hạnh phúc đôi khi chỉ là",
+  "Muốn giữ một mối quan hệ lâu dài",
+  "Thời gian là thứ công bằng nhất",
+  "Cha mẹ không cần con cái giàu",
+  "Thành công không đến từ may mắn",
+  "Im lặng đôi khi là câu trả lời",
+  "Người khôn ngoan không tranh cãi",
+  "Tuổi trẻ chỉ có một lần",
+  "Đọc sách không làm bạn giàu ngay",
+  "Ai rồi cũng phải học cách buông bỏ",
+  "Lòng tốt cũng cần có giới hạn",
+  "Bản lĩnh của một người thể hiện ở"
+];
+function shuffled(a) {
+  return a.map((x) => [Math.random(), x]).sort((p, q) => p[0] - q[0]).map((x) => x[1]);
+}
+// Model nhỏ đôi khi viết lan man không dừng: bỏ chữ nút Facebook, cắt ở cuối câu, tối đa ~1200 ký tự.
+function tidyFbPost(t, cut) {
+  let s = fbClean(String(t || "").replace(/<end_of_turn>[\s\S]*$/, ""));
+  if (s.length > 1200) {
+    const paras = s.split(/\n\n+/);
+    let acc = "";
+    for (const p of paras) {
+      if (acc && (acc + "\n\n" + p).length > 1200) break;
+      acc = acc ? acc + "\n\n" + p : p;
+    }
+    s = acc.length > 1200 ? acc.slice(0, 1200) : acc;
+    cut = true;
+  }
+  if (cut) {
+    const end = Math.max(s.lastIndexOf("."), s.lastIndexOf("!"), s.lastIndexOf("?"), s.lastIndexOf("…"));
+    if (end > s.length * 0.4) s = s.slice(0, end + 1);
+  }
+  return s.trim();
+}
+async function callOllamaFbPost(payload, settings) {
+  const base = (settings.ollamaUrl || DEFAULTS.ollamaUrl).replace(/\/+$/, "");
+  const idea = String(payload.extraHint || "").trim();
+  const hooks = idea ? Array(settings.count).fill(idea) : shuffled(FB_HOOKS).slice(0, settings.count);
+  const out = [];
+  for (let i = 0; i < hooks.length; i++) {
+    let res;
+    try {
+      res = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        signal: settings.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: settings.ollamaModel,
+          messages: [{ role: "user", content: `Viết bài đăng mạng xã hội theo phong cách page viết hay.\nÝ mở đầu: ${hooks[i]}` }],
+          stream: false,
+          keep_alive: OLLAMA_KEEP,
+          options: { ...TUNED_OPTS, num_predict: 600, num_ctx: 2048, repeat_penalty: 1.15, seed: Math.floor(Math.random() * 1e9) }
+        })
+      });
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error("Đã huỷ vì bạn mở gợi ý bài khác");
+      throw new Error("Không kết nối được Ollama. Kiểm tra Ollama đang chạy");
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const t = tidyFbPost(data.message?.content, data.done_reason === "length");
+    if (t.length >= 15 && !out.includes(t)) out.push(t);
+  }
+  if (!out.length) throw new Error("Model riêng không viết được bài.");
+  out.context = `model riêng đã học từ page · ý mở đầu: ${idea || "ngẫu nhiên"}`;
+  out.images = [];
   return out;
 }
 
@@ -1065,6 +1879,7 @@ function clockTime(ts) {
 // Khoá nghỉ của từng nhà cung cấp (Groq, Gemini tính theo từng model vì mỗi model có giới hạn riêng).
 function cooldownKey(id, settings) {
   if (id === "groq") return `groq:${settings.groqModel || DEFAULTS.groqModel}`;
+  if (id === "openai") return `openai:${settings.openaiModel || DEFAULTS.openaiModel}`;
   if (id === "gemini") return `gemini:${settings.geminiModel || DEFAULTS.geminiModel}`;
   return id;
 }
@@ -1075,13 +1890,40 @@ const PROMPT_TOKENS = 3500; // ước lượng token mỗi lần bấm Gợi ý 
 const PROVIDER_INFO = {
   gemini: { name: "Gemini", key: (s) => s.geminiKey, model: (s) => s.geminiModel, call: (p, s) => callGemini(p, s) },
   groq: { name: "Groq", key: (s) => s.groqKey, model: (s) => s.groqModel, call: (p, s) => callGroq(p, s) },
+  openai: { name: "ChatGPT", key: (s) => s.openaiKey, model: (s) => s.openaiModel || DEFAULTS.openaiModel, call: (p, s) => callOpenAI(p, s) },
   claude: { name: "Claude", key: (s) => s.apiKey, model: (s) => s.model, call: (p, s) => callClaude(p, s) },
-  ollama: { name: "Ollama", key: () => "local", model: (s) => s.ollamaModel, call: (p, s) => (isTuned(s) && p.mode !== "post" && p.mode !== "raw" ? callOllamaTuned(p, s) : callOllama(p, s)) }
+  ollama: {
+    name: "Ollama",
+    key: () => "local",
+    // Model thật sự dùng: model riêng (xcs-) chỉ viết câu trả lời, bài đăng / Studio dùng model thường.
+    model: (s, p) =>
+      isTuned(s) && p && !(p.mode === "post" && p.fbStyle) && (p.mode === "post" || p.mode === "raw" || (p.onMyPost && !s.ownTrained))
+        ? ollamaBaseModel(s) || s.ollamaModel
+        : s.ollamaModel,
+    call: (p, s) => {
+      if (!isTuned(s)) return callOllama(p, s);
+      // Model riêng đã học bài page Facebook: chế độ "Phong cách page Facebook" gọi thẳng model riêng.
+      if (p.mode === "post" && p.fbStyle) return callOllamaFbPost(p, s);
+      // Model riêng chưa học kiểu "đáp bình luận dưới bài của mình": dùng model thường với prompt đầy đủ (có ví dụ giọng chủ bài).
+      if (p.onMyPost && !s.ownTrained && ollamaBaseModel(s)) return callOllama(p, { ...s, ollamaModel: ollamaBaseModel(s) });
+      if (p.mode !== "post" && p.mode !== "raw") {
+        return (async () => {
+          const imageDesc = s.sendImages ? await describeImages(p.images, s) : "";
+          return callOllamaTuned({ ...p, imageDesc }, s);
+        })();
+      }
+      // Model riêng (xcs-) chỉ học viết câu trả lời ngắn: bài đăng / Content Studio dùng model thường trên máy.
+      const base = ollamaBaseModel(s);
+      if (!base) throw new Error("Model riêng chỉ viết được câu trả lời. Tải thêm một model thường (vd: ollama pull gemma3:4b) để viết bài.");
+      return callOllama(p, { ...s, ollamaModel: base });
+    }
+  }
 };
 
 function seesImages(id, settings) {
   if (!settings.sendImages) return false;
   if (id === "groq") return groqSeesImages(settings.groqModel, settings);
+  if (id === "openai") return openaiSeesImages(settings.openaiModel || DEFAULTS.openaiModel);
   if (id === "ollama") return !isTuned(settings) && !!(settings.ollamaVision && settings.ollamaImages);
   return true;
 }
@@ -1090,11 +1932,12 @@ async function runProvider(id, msg, settings) {
   const p = PROVIDER_INFO[id];
   const imgs = seesImages(id, settings) ? await loadImages(msg.images) : [];
   const suggestions = await p.call({ ...msg, imgs }, settings);
-  return { provider: p.name, model: p.model(settings) || "", imageCount: imgs.length, suggestions, context: suggestions.context || "", emojis: suggestions.emojis || [], images: suggestions.images || [] };
+  return { provider: p.name, model: p.model(settings, msg) || "", imageCount: imgs.length, suggestions, context: suggestions.context || "", emojis: suggestions.emojis || [], images: suggestions.images || [] };
 }
 
 // Chế độ Kết hợp: bài "quen" (đã có đủ câu bạn từng đăng cho bài giống vậy) thì để model trên máy viết theo các ví dụ đó.
 // Bài "lạ" thì hỏi model trên mạng (viết hay hơn). Câu bạn đăng sau đó được lưu lại, lần sau bài giống vậy sẽ thành "quen".
+const OWN_TRAINED_MIN = 150; // số câu "đáp bình luận dưới bài của mình" cần có trước khi tin model riêng (sau khi huấn luyện lại)
 const SIM_MIN = 0.3; // độ giống chữ tối thiểu để tính là "bài giống"
 const FAMILIAR_MIN = 2; // cần ít nhất ngần này bài giống thì mới giao cho model trên máy
 
@@ -1111,10 +1954,172 @@ function countSimilar(history, postText) {
   return n;
 }
 
+// ---------- Tạo bài viết cho X từ một bài Facebook hay ----------
+// Cùng giọng, cùng hướng ý với bài gốc nhưng viết lại bằng chữ mới, ngắn gọn cho X, có emoji.
+const FBX_GOALS = {
+  impress: { label: "Thêm nhiều lượt hiển thị", emoji: "🔥", rule: "Câu mở đầu thật mạnh, chạm đúng điều rất nhiều người đang nghĩ mà chưa nói ra. Câu ngắn, nhịp nhanh, đọc lướt 2 giây là hiểu." },
+  talk: { label: "Bắt đầu cuộc trò chuyện", emoji: "💬", rule: "Kết bằng MỘT câu hỏi mở thật, dễ trả lời, ai cũng có trải nghiệm riêng để kể. Không hỏi chung chung kiểu 'bạn nghĩ sao?'." },
+  think: { label: "Khiến người ta suy nghĩ", emoji: "🤔", rule: "Lật lại một điều quen thuộc, nói ra một sự thật giản dị mà sâu. Câu cuối để lại khoảng lặng cho người đọc tự ngẫm." },
+  share: { label: "Khiến người ta đăng lại", emoji: "🔁", rule: "Viết thành câu 'đáng trích dẫn' mà người đọc muốn đăng lại để nói thay lòng mình: đúng với số đông, ấm áp hoặc tỉnh táo, không gây tranh cãi." },
+  stop: { label: "Không thể bỏ qua", emoji: "⚡", rule: "Câu đầu gây bất ngờ hoặc nói thẳng một điều hơi trái tai nhưng đúng. Dùng tương phản (không phải A, mà là B) hoặc một hình ảnh đời thường rất cụ thể." }
+};
+const FBX_SCHEMA = {
+  type: "object",
+  properties: {
+    analysis: {
+      type: "object",
+      properties: { main_idea: { type: "string" }, tone: { type: "string" }, audience: { type: "string" }, hook: { type: "string" } },
+      required: ["main_idea", "tone", "audience", "hook"]
+    },
+    posts: {
+      type: "array",
+      items: { type: "object", properties: { goal: { type: "string" }, text: { type: "string" }, why: { type: "string" } }, required: ["goal", "text", "why"] },
+      minItems: 1
+    }
+  },
+  required: ["analysis", "posts"]
+};
+// Độ dài theo cách X đếm (gần đúng): emoji tính 2, ký tự khác tính 1.
+const xLen = (t) => [...String(t)].reduce((n, c) => n + (EMOJI_RE.test(c) ? 2 : 1), 0);
+// Tỉ lệ cụm 4 chữ trùng với bài gốc: cao = chép gần nguyên văn.
+function copyRatio(a, src) {
+  const grams = (t) => {
+    const w = String(t).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+    const s = new Set();
+    for (let i = 0; i + 3 < w.length; i++) s.add(w.slice(i, i + 4).join(" "));
+    return s;
+  };
+  const g = grams(a);
+  if (!g.size) return 0;
+  const s = grams(src);
+  let n = 0;
+  g.forEach((x) => s.has(x) && n++);
+  return n / g.size;
+}
+
+function buildFbxPrompt(msg, pastPosts) {
+  const goals = (msg.goals || []).filter((g) => FBX_GOALS[g]);
+  if (!goals.length) goals.push("think");
+  const per = msg.only ? 1 : goals.length === 1 ? 3 : goals.length === 2 ? 2 : 1;
+  const mine = (pastPosts || []).slice(-4).map((p) => `- ${String(p.text).replace(/\s+/g, " ").slice(0, 280)}`);
+  const system = [
+    "Bạn là người viết nội dung cho X (Twitter) rất giỏi, viết tiếng Việt tự nhiên như người thật.",
+    "Bạn nhận một bài Facebook hay. Việc của bạn: viết bài MỚI cho X, giữ đúng giọng và đúng hướng ý của bài gốc, nhưng bằng câu chữ của riêng mình.",
+    "",
+    "BƯỚC 1, phân tích bài gốc: ý chính là gì, giọng ra sao (ấm áp, tỉnh táo, thẳng thắn, hài hước...), viết cho ai, điều gì khiến bài gốc hay.",
+    "BƯỚC 2, viết bài cho X theo mục tiêu được giao.",
+    "",
+    "QUY TẮC:",
+    "1. KHÔNG chép: không được trùng quá 4 chữ liền với bài gốc. Cùng ý, khác lời.",
+    "2. Đơn giản, dễ hiểu ngay, nhưng KHÔNG nông cạn: phải có một ý đáng giá, đúng và có ích với hầu hết mọi người.",
+    "3. Ngắn: tối đa 240 ký tự. 1-4 câu, có thể xuống dòng giữa các câu cho dễ đọc.",
+    "4. Có emoji: 1-3 emoji đặt đúng chỗ, hợp cảm xúc của câu (không rải emoji vô nghĩa, không đặt emoji giữa từ).",
+    "5. Không hashtag (tối đa 1 nếu thật cần), không link, không gắn tên ai, không nhắc tới Facebook hay bài gốc.",
+    "6. Không bịa tin tức, số liệu, lời khuyên y khoa; không chính trị, không công kích ai.",
+    "7. Mỗi bài một cách mở đầu khác nhau.",
+    "",
+    'Chỉ trả về JSON đúng dạng: {"analysis":{"main_idea":"...","tone":"...","audience":"...","hook":"..."},"posts":[{"goal":"<mã mục tiêu>","text":"<bài cho X>","why":"<1 câu: vì sao bài này đạt mục tiêu>"}]}',
+    "Các trường trong analysis viết ngắn (dưới 20 chữ mỗi trường)."
+  ].join("\n");
+  const user = [
+    msg.page ? `Page đăng bài gốc: ${msg.page}` : "",
+    "BÀI GỐC (Facebook):",
+    String(msg.text || "").slice(0, 3000),
+    "",
+    "MỤC TIÊU (viết đúng số bài cho mỗi mục tiêu, trường goal ghi đúng mã):",
+    ...goals.map((g) => `- ${g} (${FBX_GOALS[g].label}): ${per} bài. ${FBX_GOALS[g].rule}`),
+    mine.length ? ["", "Vài bài X tôi từng đăng (học giọng của tôi, không chép):", ...mine].join("\n") : "",
+    msg.hint ? `\nGhi chú thêm của tôi: ${String(msg.hint).slice(0, 300)}` : "",
+    msg.avoid?.length ? `\nĐã có các bài dưới đây, viết KHÁC hẳn (khác mở đầu, khác cách nói):\n${msg.avoid.map((x) => `- ${String(x).slice(0, 280)}`).join("\n")}` : ""
+  ].filter(Boolean).join("\n");
+  return { system, user, goals };
+}
+
+function fbxOrder(settings) {
+  const clouds = ["groq", "gemini", "openai", "claude"].filter((x) => PROVIDER_INFO[x].key(settings));
+  const main = settings.provider === "hybrid" ? settings.hybridCloud || "groq" : settings.provider;
+  const order = PROVIDER_INFO[main] && main !== "ollama" && PROVIDER_INFO[main].key(settings) ? [main] : [];
+  order.push(...clouds.filter((x) => !order.includes(x)));
+  // Phân tích + viết bài mới là việc khó: ưu tiên AI trên mạng, Ollama trên máy làm dự phòng (hoặc làm chính nếu chọn Ollama).
+  if (settings.provider === "ollama") return ["ollama", ...order];
+  if (settings.provider === "hybrid" || (settings.ollamaModelList || []).length) order.push("ollama");
+  return order;
+}
+
+const fbxRunning = new Map(); // tab -> AbortController
+async function makeFbx(msg, tabId) {
+  if (fbxRunning.has(tabId)) fbxRunning.get(tabId).abort();
+  const ctrl = new AbortController();
+  fbxRunning.set(tabId, ctrl);
+  const progress = (text) => tabId != null && chrome.tabs.sendMessage(tabId, { type: "fbx-progress", reqId: msg.reqId, text }).catch(() => {});
+  try {
+    const settings = await getSettings();
+    settings.signal = ctrl.signal;
+    const { postHistory = [] } = await chrome.storage.local.get({ postHistory: [] });
+    const { system, user, goals } = buildFbxPrompt(msg, postHistory);
+    const order = fbxOrder(settings);
+    if (!order.length) return { error: "Chưa có AI nào dùng được. Vào Cài đặt → 🤖 AI để thêm key (Groq miễn phí) hoặc bật Ollama." };
+    const errors = [];
+    for (const id of order) {
+      if (ctrl.signal.aborted) return { cancelled: true };
+      const nm = PROVIDER_INFO[id].name;
+      const cd = await getCooldown(cooldownKey(id, settings));
+      if (cd) {
+        errors.push(`${nm}: ${cd.reason}`);
+        continue;
+      }
+      progress(`${errors.length ? `${errors[errors.length - 1]} → ` : ""}Đang nhờ ${nm}${id === "ollama" ? " trên máy (khoảng 30-60 giây)" : ""} phân tích và viết`);
+      try {
+        const r = await PROVIDER_INFO[id].call({ mode: "raw", system, user, maxTokens: 1500, schema: FBX_SCHEMA }, settings);
+        if (ctrl.signal.aborted) return { cancelled: true };
+        const j = parseJsonLoose(r.raw);
+        const posts = (j.posts || [])
+          .map((p) => {
+            let text = String(p.text || "").replace(/^["“”']+|["“”']+$/g, "").replace(/\n{3,}/g, "\n\n").trim();
+            const goal = FBX_GOALS[p.goal] ? p.goal : msg.only || goals[0];
+            if (text && !EMOJI_RE.test(text)) text += ` ${FBX_GOALS[goal].emoji}`;
+            return { goal, text, why: String(p.why || "").trim(), len: xLen(text), copied: copyRatio(text, msg.text) > 0.35 };
+          })
+          .filter((p) => p.text.length >= 15);
+        if (!posts.length) throw new Error("AI trả về bài rỗng");
+        return { analysis: j.analysis || {}, posts, provider: nm, model: PROVIDER_INFO[id].model(settings, { mode: "raw" }) || "" };
+      } catch (e) {
+        if (ctrl.signal.aborted) return { cancelled: true };
+        errors.push(`${nm}: ${e.message}`);
+      }
+    }
+    return { error: `Không viết được (${errors.join(" | ")})` };
+  } finally {
+    if (fbxRunning.get(tabId) === ctrl) fbxRunning.delete(tabId);
+  }
+}
+
+// Bài bạn chọn (chép / đăng lên X): lưu lại cùng bài gốc, sau này dùng để dạy model.
+async function saveFbxPick(msg) {
+  const { fbxPicks = [] } = await chrome.storage.local.get({ fbxPicks: [] });
+  fbxPicks.push({
+    ts: Date.now(),
+    page: String(msg.page || ""),
+    url: String(msg.url || ""),
+    source: String(msg.source || "").slice(0, 5000),
+    goal: String(msg.goal || ""),
+    suggested: String(msg.suggested || "").slice(0, 1000),
+    text: String(msg.text || "").slice(0, 1000),
+    action: msg.action === "post" ? "post" : "copy"
+  });
+  await chrome.storage.local.set({ fbxPicks: fbxPicks.slice(-1000) });
+}
+
 // Mỗi tab chỉ chạy một lần gợi ý: mở bài khác thì huỷ lần cũ.
 const running = new Map();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === "xcs-build-prompt") {
+    buildPromptJson(msg)
+      .then((prompt) => sendResponse({ prompt }))
+      .catch((e) => sendResponse({ error: e.message || String(e) }));
+    return true;
+  }
   if (msg && msg.type === "xcs-suggest") {
     const tabId = _sender.tab?.id;
     if (tabId != null && running.has(tabId)) running.get(tabId).abort();
@@ -1128,23 +2133,45 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const settings = await getSettings();
       settings.signal = ctrl.signal;
       const isPost = msg.mode === "post";
+      if (!isPost && msg.onMyPost && !msg.myPost && msg.id) {
+        progress("Đang đọc bài gốc của bạn");
+        msg.myPost = await parentText(msg.id);
+      }
       const { history = [] } = settings.learn ? await chrome.storage.local.get({ history: [] }) : {};
-      if (settings.learn && !isPost) settings.examples = pickExamples(history, msg.text, 4);
+      if (settings.learn && !isPost) settings.examples = pickExamples(history, msg.text, 4, msg.onMyPost);
       if (isPost) settings.pastPosts = (await chrome.storage.local.get({ postHistory: [] })).postHistory;
+      if (isPost) settings.stylePosts = await stylePostsFor(msg);
+      settings.ownTrained = (history || []).filter((h) => h.onMyPost).length >= OWN_TRAINED_MIN;
       settings.samples = styleSamples(settings, settings.learn ? history : []);
       settings.profile = styleProfile(settings.samples);
       const count = Math.min(5, Math.max(3, Number(settings.count) || 4));
       settings.count = count;
+      if (msg.quick && !isPost && msg.onMyPost) {
+        settings.emojiTail = "auto";
+        msg.extraHint = [
+          msg.extraHint,
+          questionOf(msg.text)
+            ? "Người ta đang hỏi: trả lời thật câu hỏi, 3-12 chữ, giọng nói chuyện thân mật"
+            : "Đáp kiểu chủ bài: 1-4 chữ, dạ vâng / ok / hihi / được thui, không câu dài"
+        ].filter(Boolean).join(". ");
+      } else if (msg.quick && !isPost) {
+        settings.emojiTail = "auto"; // xin AI chọn emoji cho từng câu (dải gợi ý nhanh luôn có emoji)
+        msg.extraHint = [
+          msg.extraHint,
+          "Viết như người thật gõ vội trên điện thoại: ngắn (3-15 chữ), tự nhiên, thân mật, có thể viết thường, từ lóng nhẹ. Mỗi câu một ý khác nhau",
+          "Câu nào cũng phải đáp đúng vào điều người kia vừa nói, không nói về ảnh nếu bài không có ảnh"
+        ].filter(Boolean).join(". ");
+      }
       // Câu mẫu có sẵn chỉ hợp với bình luận; bài đăng thì không có câu mẫu.
-      const fallback = () =>
-        isPost
-          ? []
-          : self.XCSTemplates.templateSuggestions({
-              text: msg.text,
-              hasMedia: msg.hasMedia,
-              count,
-              language: settings.language
-            });
+      const fallback = () => {
+        if (isPost) return [];
+        if (msg.onMyPost) {
+          const pick = ownPool(msg.text).slice(0, count);
+          return msg.quick ? pick.map((x, i) => quickEmoji(x, i, null, true)) : pick;
+        }
+        const t = self.XCSTemplates.templateSuggestions({ text: msg.text, hasMedia: msg.hasMedia, count, language: settings.language });
+        return msg.quick ? t.map((x, i) => quickEmoji(x, i)) : t;
+      };
       const noteTail = isPost ? "" : " Đang dùng câu mẫu.";
 
       // Thứ tự thử các nhà cung cấp.
@@ -1154,9 +2181,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const cloud = settings.hybridCloud || "groq";
         const hasCloudKey = !!PROVIDER_INFO[cloud].key(settings);
         const similar = settings.learn && !isPost ? countSimilar(history || [], msg.text) : 0;
+        const ownLearned = (history || []).filter((h) => h.onMyPost).length;
         if (!hasCloudKey) {
           order = ["ollama"];
           route = `chưa có ${PROVIDER_INFO[cloud].name} key nên dùng máy`;
+        } else if (isPost && msg.fbStyle && isTuned(settings)) {
+          order = ["ollama", cloud];
+          route = "phong cách page Facebook: dùng model riêng đã học từ page";
+        } else if (msg.onMyPost && isTuned(settings) && ownLearned < OWN_TRAINED_MIN) {
+          // Model riêng chưa được dạy kiểu "đáp bình luận dưới bài của mình": để bên trên mạng viết.
+          order = [cloud, "ollama"];
+          route = `bình luận dưới bài của bạn (mới có ${ownLearned} câu mẫu, chưa đủ để model riêng học)`;
         } else if (similar >= FAMILIAR_MIN) {
           order = ["ollama", cloud];
           route = `bài quen, có ${similar} bài giống`;
@@ -1175,9 +2210,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         // Bên chính lỗi (hết lượt, quá tải...) thì tự thử các bên trên mạng khác đã có key.
-        order = [id, ...["groq", "gemini", "claude"].filter((x) => x !== id && PROVIDER_INFO[x].key(settings))];
+        order = [id, ...["groq", "gemini", "openai", "claude"].filter((x) => x !== id && PROVIDER_INFO[x].key(settings))];
+        // Model riêng chưa học kiểu "đáp bình luận dưới bài của mình": có key bên trên mạng thì để bên đó viết trước.
+        if (id === "ollama" && msg.onMyPost && isTuned(settings) && order.length > 1 &&
+            (history || []).filter((h) => h.onMyPost).length < OWN_TRAINED_MIN) order = [...order.slice(1), "ollama"];
         // Đã cài Ollama (có model trong danh sách) thì dùng làm dự phòng cuối cùng.
         if (id !== "ollama" && settings.ollamaFallback && (settings.ollamaModelList || []).length) order.push("ollama");
+        // Phong cách page Facebook: đã có model riêng (xcs-) thì để nó viết trước, bên trên mạng làm dự phòng.
+        if (isPost && msg.fbStyle && isTuned(settings) && (settings.ollamaModelList || []).length) order = ["ollama", ...order.filter((x) => x !== "ollama")];
         route = "";
       }
 
@@ -1201,8 +2241,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             r.images = c.images;
             if (!out.length) throw new Error("Model trả về bài rỗng");
           } else out = r.suggestions.map((x) => applyStyle(x, settings.profile));
+          if (!isPost && msg.onMyPost) out = shortOwnReplies(out, msg.text, count);
           if (settings.capitalize) out = out.map(capFirst);
-          if (!isPost) out = out.map((x, i) => addEmojiTail(x, i, r.emojis, settings));
+          if (!isPost && msg.quick) out = out.map((x, i) => quickEmoji(x, i, r.emojis, msg.onMyPost));
+          else if (!isPost) out = out.map((x, i) => addEmojiTail(x, i, r.emojis, settings));
           const why = i > 0 ? [route, `${errors.join("; ")} → chuyển sang ${PROVIDER_INFO[order[i]].name}`].filter(Boolean).join("; ") : route;
           sendResponse({ source: "ai", ...r, suggestions: out, route: why });
           return;
@@ -1219,6 +2261,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (tabId != null && running.get(tabId) === ctrl) running.delete(tabId);
     });
     return true; // giữ kênh để trả lời bất đồng bộ
+  }
+  if (msg && msg.type === "fbx-make") {
+    makeFbx(msg, _sender.tab?.id).then(sendResponse, (e) => sendResponse({ error: e.message || String(e) }));
+    return true;
+  }
+  if (msg && msg.type === "fbx-cancel") {
+    const c = fbxRunning.get(_sender.tab?.id);
+    if (c) c.abort();
+    return false;
+  }
+  if (msg && msg.type === "fbx-pick") {
+    saveFbxPick(msg).then(() => sendResponse({ ok: true }), () => sendResponse(null));
+    return true;
   }
   if (msg && msg.type === "xcs-similar") {
     chrome.storage.local.get({ history: [] }).then(({ history }) => sendResponse({ items: similarPast(history, msg.text) }));
@@ -1238,8 +2293,79 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     savePost(msg);
     return;
   }
+  if (msg && msg.type === "fb-save-post") {
+    saveFbPost(msg).then(sendResponse, () => sendResponse(null));
+    return true;
+  }
+  if (msg && msg.type === "fb-list") {
+    chrome.storage.local.get({ fbPosts: [] }).then(({ fbPosts }) => sendResponse({ items: fbPosts }));
+    return true;
+  }
+  if (msg && msg.type === "fb-dupcheck") {
+    fbUpdate([], (list) => {
+      fbDupCheck(list);
+      return list;
+    }).then(async () => {
+      const { fbPosts = [] } = await chrome.storage.local.get({ fbPosts: [] });
+      sendResponse({ dup: fbPosts.filter((p) => fbStatus(p) === "dup").length, fresh: fbPosts.filter((p) => fbStatus(p) === "new").length });
+    });
+    return true;
+  }
+  if (msg && msg.type === "fb-approve") {
+    fbApprove(msg.ids, msg.edits).then(sendResponse, (e) => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg && msg.type === "fb-set-status") {
+    fbUpdate(msg.ids, (list, want) =>
+      list.map((p) => (want.has(p.id) ? { ...p, status: msg.status, ...(msg.status === "new" ? { train: undefined, dupOf: "", sim: 0 } : {}) } : p))
+    ).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "fb-delete") {
+    fbUpdate(msg.ids, (list, want) => list.filter((p) => !want.has(p.id))).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "fb-preview") {
+    const clean = fbClean(msg.text).slice(0, 1500);
+    sendResponse({ user: fbPrompt(clean), assistant: clean });
+    return;
+  }
+  if (msg && msg.type === "fb-open-data") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("fbdata.html") });
+    return;
+  }
+  if (msg && msg.type === "fb-stats") {
+    chrome.storage.local.get({ fbPosts: [] }).then(({ fbPosts }) => {
+      const by = {};
+      fbPosts.forEach((p) => (by[p.page] = (by[p.page] || 0) + 1));
+      const st = { new: 0, train: 0, dup: 0, skip: 0 };
+      fbPosts.forEach((p) => st[fbStatus(p)]++);
+      sendResponse({ total: fbPosts.length, by, st });
+    });
+    return true;
+  }
+  if (msg && msg.type === "fb-clear") {
+    chrome.storage.local.set({ fbPosts: [] }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
   if (msg && msg.type === "xcs-train-data") {
-    chrome.storage.local.get({ history: [] }).then(({ history }) => sendResponse({ lines: trainLines(history) }));
+    // scope: "all" (mặc định), "x" (chỉ trả lời trên X), "fb" (chỉ bài page Facebook), "count" (chỉ đếm).
+    chrome.storage.local.get({ history: [], fbPosts: [], fbTrain: true }).then(({ history, fbPosts, fbTrain }) => {
+      const scope = msg.scope || "all";
+      const ownLines = trainLines((history || []).filter((h) => h.onMyPost));
+      const replies = trainLines(history);
+      const fbAll = fbTrainLines(fbPosts);
+      const counts = {
+        replies: replies.length - ownLines.length,
+        own: ownLines.length,
+        fb: fbAll.length,
+        fbWaiting: (fbPosts || []).filter((p) => fbStatus(p) === "new").length
+      };
+      if (scope === "count") return sendResponse({ lines: [], counts });
+      const x = scope === "fb" ? [] : replies;
+      const fb = scope === "x" || (scope === "all" && !fbTrain) ? [] : fbAll;
+      sendResponse({ lines: [...x, ...fb], counts: { ...counts, replies: x.length ? counts.replies : 0, own: x.length ? counts.own : 0, fb: fb.length } });
+    });
     return true;
   }
   if (msg && msg.type === "xcs-warm") {

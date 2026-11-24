@@ -123,7 +123,7 @@ const STUDIO_CONFIG_DEFAULT = {
   idea_weights: { originality: 30, relevance: 25, engagement: 25, authenticity: 20 },
   critic_weights: Object.fromEntries(Object.keys(CRITIC_DIMS).map((k) => [k, 1])),
   // Giá tham khảo USD / 1 triệu token, tự sửa. Bản miễn phí = 0.
-  prices: { groq: { in: 0, out: 0 }, gemini: { in: 0, out: 0 }, claude: { in: 3, out: 15 }, ollama: { in: 0, out: 0 } },
+  prices: { groq: { in: 0, out: 0 }, gemini: { in: 0, out: 0 }, openai: { in: 0.25, out: 2 }, claude: { in: 3, out: 15 }, ollama: { in: 0, out: 0 } },
   platform: "x",
   image_auto: false,
   image_style: "ảnh chụp đời thường, ánh sáng tự nhiên",
@@ -583,7 +583,7 @@ const estTokens = (s) => Math.ceil(String(s || "").length / 3.5);
 async function providerOrder(task, settings, config) {
   const pref = config.routing?.[task] || "auto";
   const usable = (id) => PROVIDER_INFO[id] && PROVIDER_INFO[id].key(settings) && (id !== "ollama" || (settings.ollamaModelList || []).length || settings.provider === "ollama");
-  const auto = ["groq", "gemini", "claude", "ollama"];
+  const auto = ["groq", "gemini", "openai", "claude", "ollama"];
   const order = pref !== "auto" ? [pref, ...auto.filter((x) => x !== pref)] : auto;
   return order.filter(usable);
 }

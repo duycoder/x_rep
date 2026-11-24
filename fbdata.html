@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dữ liệu bài viết</title>
+  <style>
+    :root { --bg: #fff; --fg: #0f1419; --muted: #536471; --line: #cfd9de; --accent: #1d9bf0; --card: #f7f9f9;
+      --ok: #00875a; --warn: #b45309; --bad: #e0245e; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #15202b; --fg: #e7e9ea; --muted: #8b98a5; --line: #38444d; --card: #1e2732; --ok: #4ade80; --warn: #fbbf24; }
+    }
+    * { box-sizing: border-box; }
+    body { background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      max-width: 980px; margin: 0 auto; padding: 0 16px 60px; }
+    header { position: sticky; top: 0; background: var(--bg); padding: 16px 0 10px; border-bottom: 1px solid var(--line); z-index: 2; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .stats { color: var(--muted); font-size: 13px; }
+    .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tabs button { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+    .tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 999px; padding: 6px 14px; font: 600 13px inherit;
+      font-family: inherit; cursor: pointer; }
+    button.sec { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
+    button:disabled { opacity: .45; cursor: default; }
+    input[type="search"], select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: transparent;
+      color: inherit; font: inherit; min-width: 0; }
+    input[type="search"] { flex: 1 1 200px; }
+    select option { color: #000; }
+    #msg { font-size: 13px; color: var(--muted); min-height: 20px; margin-top: 6px; }
+    .card { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 10px; background: var(--card); }
+    .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12px; color: var(--muted); }
+    .meta input { margin: 0; width: 16px; height: 16px; }
+    .meta a { color: var(--accent); }
+    .chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 8px; border: 1px solid currentColor; }
+    .chip.new { color: var(--accent); } .chip.train { color: var(--ok); } .chip.dup { color: var(--warn); } .chip.skip { color: var(--muted); }
+    textarea { width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+      color: inherit; font: inherit; resize: vertical; min-height: 80px; }
+    .text { white-space: pre-wrap; margin-top: 6px; }
+    .dupinfo { font-size: 12px; color: var(--warn); margin-top: 6px; }
+    .dupinfo .orig { color: var(--muted); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    details { margin-top: 6px; font-size: 12px; }
+    details pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px; margin: 6px 0 0; font: 12px/1.45 Consolas, "Courier New", monospace; }
+    .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+    .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 10px 0; }
+    .pager .pg { margin: 0; min-width: 32px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line);
+      background: transparent; color: inherit; font: 13px/1.2 inherit; cursor: pointer; }
+    .pager .pg.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .pager .pg:disabled:not(.on) { opacity: .35; cursor: default; }
+    .pager .pginfo { margin-left: 8px; color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📋 Dữ liệu bài viết (Facebook)</h1>
+    <div class="stats" id="stats">Đang tải...</div>
+    <div class="bar">
+      <div class="tabs" id="tabs">
+        <button data-f="new" class="on">Chờ duyệt</button>
+        <button data-f="train">Đã vào train</button>
+        <button data-f="dup">Trùng</button>
+        <button data-f="skip">Bỏ qua</button>
+        <button data-f="all">Tất cả</button>
+      </div>
+      <select id="page"><option value="">Mọi page</option></select>
+      <input type="search" id="q" placeholder="Tìm trong bài..." />
+    </div>
+    <div class="bar">
+      <button class="sec" id="dupBtn" title="So mọi bài chờ duyệt với bài đã vào train và với nhau (giống từ 80% là trùng, giữ bản dài hơn)">🔍 Kiểm tra trùng</button>
+      <button class="sec" id="selAll">Chọn hết trang này</button>
+      <button id="approve" disabled>✅ Đưa vào dữ liệu train</button>
+      <button class="sec" id="skip" disabled>Bỏ qua</button>
+      <button class="sec" id="back" disabled>Đưa về chờ duyệt</button>
+      <button class="danger" id="del" disabled>Xoá</button>
+    </div>
+    <div id="msg"></div>
+  </header>
+  <div class="pager" id="pagerTop" hidden></div>
+  <main id="list"></main>
+  <div class="pager" id="pagerBot" hidden></div>
+  <script src="pager.js"></script>
+  <script src="fbdata.js"></script>
+</body>
+</html>

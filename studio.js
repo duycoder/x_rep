@@ -37,7 +37,7 @@ const STATUS_VI = {
 const ORIGIN_VI = { user: "Bạn nhập", imported: "Bạn nhập từ file", derived: "Rút từ bài đã duyệt", inferred: "Suy đoán", external: "Nguồn ngoài" };
 const TRUSTED = ["user", "imported", "derived"];
 const TASK_VI = { discover: "Tìm cơ hội", ideate: "Nghĩ ý tưởng", write: "Viết nháp", critique: "Phê bình", rewrite: "Viết lại", test: "Thử AI" };
-const PROVIDERS = { groq: "Groq", gemini: "Gemini", claude: "Claude", ollama: "Ollama (trên máy)" };
+const PROVIDERS = { groq: "Groq", gemini: "Gemini", openai: "ChatGPT", claude: "Claude", ollama: "Ollama (trên máy)" };
 const badge = (s, label) => `<span class="badge ${esc(s)}">${esc(label || STATUS_VI[s] || s)}</span>`;
 const ring = (n, title = "") => {
   const v = Number(n) || 0;
@@ -68,12 +68,12 @@ async function refreshState() {
   M = st;
 }
 async function loadAiInfo() {
-  AIS = await chrome.storage.local.get({ provider: "gemini", groqKey: "", geminiKey: "", apiKey: "", groqModel: "", geminiModel: "", ollamaModel: "", model: "", ollamaModelList: [], cooldowns: {} });
+  AIS = await chrome.storage.local.get({ provider: "gemini", groqKey: "", geminiKey: "", apiKey: "", openaiKey: "", openaiModel: "gpt-5-mini", groqModel: "", geminiModel: "", ollamaModel: "", model: "", ollamaModelList: [], cooldowns: {} });
   const has = Object.keys(PROVIDERS).filter((id) => providerReady(id));
   $("#aiInfo").textContent = has.length ? `AI: ${has.map((id) => PROVIDERS[id].split(" ")[0]).join(" → ")}` : "AI: chưa cấu hình";
 }
-const providerReady = (id) => (id === "groq" ? !!AIS.groqKey : id === "gemini" ? !!AIS.geminiKey : id === "claude" ? !!AIS.apiKey : (AIS.ollamaModelList || []).length > 0 || AIS.provider === "ollama");
-const providerModel = (id) => ({ groq: AIS.groqModel, gemini: AIS.geminiModel, claude: AIS.model, ollama: AIS.ollamaModel })[id] || "";
+const providerReady = (id) => (id === "groq" ? !!AIS.groqKey : id === "openai" ? !!AIS.openaiKey : id === "gemini" ? !!AIS.geminiKey : id === "claude" ? !!AIS.apiKey : (AIS.ollamaModelList || []).length > 0 || AIS.provider === "ollama");
+const providerModel = (id) => ({ groq: AIS.groqModel, openai: AIS.openaiModel, gemini: AIS.geminiModel, claude: AIS.model, ollama: AIS.ollamaModel })[id] || "";
 
 async function load() {
   await refreshState();
@@ -109,7 +109,7 @@ chrome.storage.onChanged.addListener((ch, area) => {
     else S[v] = ch[k].newValue ?? (v === "snaps" ? {} : []);
   }
   if (Object.keys(ch).some((k) => k.startsWith("studioImg:"))) (hit = true), changedKeys.add("img");
-  if (["groqKey", "geminiKey", "apiKey", "cooldowns", "ollamaModelList", "provider"].some((k) => k in ch)) loadAiInfo();
+  if (["groqKey", "geminiKey", "apiKey", "openaiKey", "cooldowns", "ollamaModelList", "provider"].some((k) => k in ch)) loadAiInfo();
   if (!hit) return;
   const go = () => {
     renderJobBanner();
@@ -1260,7 +1260,7 @@ function renderAi(force) {
       const cd = Object.entries(cds).find(([k, v]) => k.startsWith(id) && v.until > Date.now());
       return `<tr><td><b>${esc(n)}</b><div class="muted small">${esc(providerModel(id) || "")}</div></td><td>${providerReady(id) ? "🟢 có" : "⚪ chưa cấu hình"}${cd ? `<div class="warnbox">⏸ nghỉ tới ${fmtTime(cd[1].until)}: ${esc(cd[1].reason)}</div>` : ""}</td><td class="num">${providerReady(id) ? `<button class="b s" data-test="${id}">Thử</button>` : ""}</td></tr>`;
     }).join("")}</tbody></table>
-    <div class="note" style="margin-top:6px">Điền key / chọn model ở <a href="options.html" target="_blank">Cài đặt extension</a>. Key chỉ nằm trên máy này và không có trong file xuất dữ liệu.</div>`;
+    <div class="note" style="margin-top:6px">Điền key / chọn model ở <a href="options.html#ai" target="_blank">Cài đặt extension</a>. Key chỉ nằm trên máy này và không có trong file xuất dữ liệu.</div>`;
   $$("#providerCard [data-test]").forEach((b) =>
     (b.onclick = async () => {
       b.textContent = "...";

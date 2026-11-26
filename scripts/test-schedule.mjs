@@ -133,6 +133,23 @@ await ext.closeTab();
 await sleep(2500);
 ext = await findExt();
 if (!check("Đã tải lại extension (code mới nhất)", !!ext)) process.exit(1);
+// Tab X đang mở mất kết nối với extension vừa tải lại (mất dải gợi ý trả lời): F5 giúp, trừ tab đang soạn dở.
+let refreshed = 0, kept = 0;
+for (const t of (await targets()).filter((x) => x.type === "page" && /^https:\/\/(x|twitter)\.com\//.test(x.url))) {
+  const c = await attach(t).catch(() => null);
+  if (!c) continue;
+  const drafting = await c
+    .evaluate(() => [...document.querySelectorAll('[data-testid^="tweetTextarea_"]')].some((e) => e.innerText.trim()))
+    .catch(() => true);
+  if (drafting) kept++;
+  else {
+    await c.send("Page.reload");
+    refreshed++;
+  }
+  c.close();
+}
+if (refreshed) await sleep(5000); // chờ các tab tải xong, kẻo tab /home cũ lấy mất bài chờ hẹn
+console.log(`   Tải lại ${refreshed} tab X${kept ? ` · để nguyên ${kept} tab đang soạn dở (bấm F5 sau)` : ""}`);
 
 const st = await ext.c.evaluate(async (text) => {
   const s = await chrome.storage.local.get({ schedList: [], schedGapMin: 60 });
@@ -146,60 +163,28 @@ console.log(`   Bài đã hẹn: ${list.length ? list.map((x) => fmt(new Date(x.
 
 const tab = await (await fetch(`${base}/json/new?https://x.com/home`, { method: "PUT" })).json();
 const page = await attach(tab);
-let report = null;
 try {
-  const state = await page.evaluate(async () => {
-    const until = Date.now() + 30000;
-    while (Date.now() < until) {
-      if (document.querySelector('[data-testid="loginButton"], [data-testid="login"]') || location.pathname === "/") return { loggedOut: true };
-      const d = [...document.querySelectorAll('[role="dialog"]')].find((x) => x.querySelectorAll("select").length >= 5);
-      if (d) {
-        await new Promise((r) => setTimeout(r, 1500)); // chờ extension chọn xong các ô
-        const out = {};
-        const twelves = [];
-        for (const s of d.querySelectorAll("select")) {
-          const vals = [...s.options].map((o) => o.value).filter((v) => v !== "");
-          if (vals.length === 2) out.ampm = s.value;
-          else if (vals.length >= 55) out.minute = s.value;
-          else if (vals.some((v) => /^\d{4}$/.test(v))) out.year = s.value;
-          else if (vals.length >= 28 && vals.length <= 31) out.day = s.value;
-          else if (vals.length === 12) twelves.push(s.value);
-        }
-        out.month = twelves[0];
-        out.hour = twelves[1];
-        return { selects: out };
-      }
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    return { timeout: true };
-  });
-  if (state.loggedOut) fail("Brave chưa đăng nhập X");
+  // Tab mới còn đang chuyển trang thì lần chạy đầu bị huỷ (không có kết quả): thử lại.
+  let state;
+  for (let i = 0; i < 5 && !state; i++) {
+    await sleep(2000);
+    state = await page.evaluate(readScheduleDialog).catch(() => undefined);
+  }
+  if (!state) throw new Error("trang X không phản hồi");
+  if (state.loggedOut) throw new Error("Brave chưa đăng nhập X");
   if (!check("Mở được bảng Hẹn giờ của X", !!state.selects)) throw new Error("no dialog");
 
   // Giờ mong đợi: tính tại lúc ghi bài chờ và lúc kiểm tra (có thể vừa qua mốc 5 phút)
   const exp = [nextSlot(list, st.schedGapMin, st.now), nextSlot(list, st.schedGapMin, Date.now())];
   const got = state.selects;
   const same = (e) => Object.entries(sel(e)).every(([k, v]) => String(got[k]).toLowerCase() === v);
-  const match = exp.find(same);
-  check("Giờ hẹn đúng giờ kế tiếp", !!match, `X: ${got.day}/${got.month} ${got.hour}:${String(got.minute).padStart(2, "0")} ${got.ampm} · mong đợi: ${fmt(exp[0])}`);
+  check("Giờ hẹn đúng giờ kế tiếp", exp.some(same), `X: ${got.day}/${got.month} ${got.hour}:${String(got.minute).padStart(2, "0")} ${got.ampm} · mong đợi: ${fmt(exp[0])}`);
 
-  const after = await page.evaluate(async () => {
-    const b =
-      document.querySelector('[data-testid="scheduledConfirmationPrimaryAction"]') ||
-      [...document.querySelectorAll('[role="dialog"] button')].find((x) => /^(confirm|xác nhận)$/i.test(x.innerText.trim()));
-    if (!b) return { noConfirm: true };
-    b.click(); // Confirm chỉ quay về khung soạn, chưa hẹn gì
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 300));
-      const ta = [...document.querySelectorAll('[role="dialog"] [data-testid="tweetTextarea_0"]')][0];
-      if (ta) return { text: ta.innerText.trim(), btn: (document.querySelector('[role="dialog"] [data-testid="tweetButton"]') || {}).innerText };
-    }
-    return { noComposer: true };
-  });
+  const after = await page.evaluate(confirmAndRead);
   check("Bấm Confirm → bài còn nguyên trong khung soạn", after.text === TEST_TEXT, after.text != null ? `"${after.text}"` : JSON.stringify(after));
   check("Nút chính là Schedule (chưa đăng)", /schedule|lên lịch|hẹn/i.test(after.btn || ""), after.btn || "");
 } catch (e) {
-  if (e.message !== "no dialog") console.log("❌ Lỗi: " + e.message);
+  if (e.message !== "no dialog") check("Lỗi: " + e.message, false);
 } finally {
   const shot = path.join(os.tmpdir(), `xcs-schedule-${Date.now()}.png`);
   const r = await page.send("Page.captureScreenshot", { format: "png" });
@@ -210,6 +195,46 @@ try {
   page.close();
   if (!args.has("--keep")) await fetch(`${base}/json/close/${tab.id}`).catch(() => {}); // đóng tab, bài thử không được lưu
   else console.log("   Để lại tab X: nhớ đóng và Discard, đừng bấm Schedule.");
+}
+
+// --- Chạy trong trang X ---
+async function readScheduleDialog() {
+  const until = Date.now() + 30000;
+  while (Date.now() < until) {
+    if (document.querySelector('[data-testid="loginButton"], [data-testid="login"]') || location.pathname === "/") return { loggedOut: true };
+    const d = [...document.querySelectorAll('[role="dialog"]')].find((x) => x.querySelectorAll("select").length >= 5);
+    if (d) {
+      await new Promise((r) => setTimeout(r, 1500)); // chờ extension chọn xong các ô
+      const out = {};
+      const twelves = [];
+      for (const s of d.querySelectorAll("select")) {
+        const vals = [...s.options].map((o) => o.value).filter((v) => v !== "");
+        if (vals.length === 2) out.ampm = s.value;
+        else if (vals.length >= 55) out.minute = s.value;
+        else if (vals.some((v) => /^\d{4}$/.test(v))) out.year = s.value;
+        else if (vals.length >= 28 && vals.length <= 31) out.day = s.value;
+        else if (vals.length === 12) twelves.push(s.value);
+      }
+      out.month = twelves[0];
+      out.hour = twelves[1];
+      return { selects: out };
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { timeout: true };
+}
+async function confirmAndRead() {
+  const b =
+    document.querySelector('[data-testid="scheduledConfirmationPrimaryAction"]') ||
+    [...document.querySelectorAll('[role="dialog"] button')].find((x) => /^(confirm|xác nhận)$/i.test(x.innerText.trim()));
+  if (!b) return { noConfirm: true };
+  b.click(); // Confirm chỉ quay về khung soạn, chưa hẹn gì
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    const ta = document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]');
+    if (ta) return { text: ta.innerText.trim(), btn: document.querySelector('[role="dialog"] [data-testid="tweetButton"]')?.innerText };
+  }
+  return { noComposer: true };
 }
 
 const bad = results.filter((r) => !r.ok).length;

@@ -1637,7 +1637,17 @@
     quick.classList.remove("open");
   });
   const quickTimer = setInterval(() => {
-    if (!chrome.runtime?.id) return clearInterval(quickTimer);
+    if (!chrome.runtime?.id) {
+      // Extension vừa tải lại: trang cũ mất kết nối, dải gợi ý không hiện được nữa.
+      // Đừng im lặng: lần tới mở cửa sổ trả lời thì nhắc F5.
+      clearInterval(quickTimer);
+      const warn = setInterval(() => {
+        if (!replyDialog()) return;
+        clearInterval(warn);
+        toast("Extension vừa được cập nhật nên chưa có gợi ý: bấm F5 tải lại trang X.");
+      }, 1000);
+      return;
+    }
     const d = replyDialog();
     if (!d) {
       quickCur = null;

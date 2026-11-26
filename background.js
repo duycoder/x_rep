@@ -2352,6 +2352,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     saveFbPost(msg).then(sendResponse, () => sendResponse(null));
     return true;
   }
+  if (msg && msg.type === "fb-download-video") {
+    // Link MP4 của Facebook (fbcdn) đã ký sẵn, tải thẳng vào thư mục Downloads/facebook-video/.
+    let ok = false;
+    try {
+      ok = /^https:\/\/[\w.-]+\.fbcdn\.net\//.test(new URL(msg.url).origin + "/");
+    } catch (_) {}
+    if (!ok) {
+      sendResponse({ ok: false, error: "link không phải video Facebook" });
+      return;
+    }
+    chrome.downloads
+      // saveAs:false: không hỏi chỗ lưu (kể cả khi trình duyệt bật "hỏi nơi lưu mỗi tệp")
+      .download({ url: msg.url, filename: msg.filename, conflictAction: "uniquify", saveAs: false })
+      .then((id) => sendResponse({ ok: true, id }), (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
   if (msg && msg.type === "fb-list") {
     chrome.storage.local.get({ fbPosts: [] }).then(({ fbPosts }) => sendResponse({ items: fbPosts }));
     return true;

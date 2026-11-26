@@ -3,27 +3,108 @@
   "name": "X Gợi Ý Bình Luận",
   "version": "1.0.0",
   "description": "Thêm nút \"Gợi ý bình luận\" vào mỗi bài trên X. Bạn chọn câu, extension điền vào ô trả lời, bạn tự bấm Thích và Trả lời.",
-  "permissions": ["storage", "alarms", "unlimitedStorage", "nativeMessaging"],
-  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://generativelanguage.googleapis.com/*", "https://api.groq.com/*", "https://api.openai.com/*", "https://pbs.twimg.com/*", "https://cdn.syndication.twimg.com/*", "https://api.anthropic.com/*", "http://localhost:11434/*", "http://127.0.0.1:11434/*", "https://image.pollinations.ai/*", "https://api.openverse.org/*", "https://api.open-meteo.com/*", "https://geocoding-api.open-meteo.com/*", "https://vnexpress.net/*", "https://tuoitre.vn/*", "https://thanhnien.vn/*", "https://genk.vn/*", "https://dantri.com.vn/*", "https://hn.algolia.com/*", "https://api.github.com/*", "https://www.reddit.com/*"],
-  "optional_host_permissions": ["https://*/*"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "unlimitedStorage",
+    "nativeMessaging",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.groq.com/*",
+    "https://api.openai.com/*",
+    "https://pbs.twimg.com/*",
+    "https://cdn.syndication.twimg.com/*",
+    "https://api.anthropic.com/*",
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*",
+    "https://image.pollinations.ai/*",
+    "https://api.openverse.org/*",
+    "https://api.open-meteo.com/*",
+    "https://geocoding-api.open-meteo.com/*",
+    "https://vnexpress.net/*",
+    "https://tuoitre.vn/*",
+    "https://thanhnien.vn/*",
+    "https://genk.vn/*",
+    "https://dantri.com.vn/*",
+    "https://hn.algolia.com/*",
+    "https://api.github.com/*",
+    "https://www.reddit.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["xhook.js"],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "xhook.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["templates.js", "imagekit.js", "postopts.js", "content.js"],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "templates.js",
+        "imagekit.js",
+        "postopts.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.facebook.com/*", "https://web.facebook.com/*"],
-      "js": ["fbsave.js"],
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://web.facebook.com/*"
+      ],
+      "js": [
+        "fbhook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://web.facebook.com/*"
+      ],
+      "js": [
+        "fbsave.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.threads.com/*",
+        "https://www.threads.net/*"
+      ],
+      "js": [
+        "thhook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.threads.com/*",
+        "https://www.threads.net/*"
+      ],
+      "js": [
+        "thsave.js"
+      ],
       "run_at": "document_idle"
     }
   ],

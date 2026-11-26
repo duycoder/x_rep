@@ -187,10 +187,13 @@
     }
     return box;
   }
+  // Tin nhắn Messenger (khung chat nổi, trang /messages) cũng là role="article" nhưng nằm trong role="log":
+  // không phải bài đăng, không gắn nút, không tự lưu (lỗi cũ: tin nhắn riêng bị lưu thành bài của page).
+  const inChat = (el) => !!el.closest('[role="log"]') || /^\/(messages|t)\//.test(location.pathname);
   function findPosts() {
-    // Gỡ khung đã đánh dấu nhầm (nay chứa nhiều bài) để tìm lại từng bài.
+    // Gỡ khung đã đánh dấu nhầm (nay chứa nhiều bài, hoặc là tin nhắn chat) để tìm lại từng bài.
     document.querySelectorAll("[data-xcs-post]").forEach((card) => {
-      if (!overgrown(card)) return;
+      if (!overgrown(card) && !inChat(card)) return;
       delete card.dataset.xcsPost;
       delete card.dataset.xcsAuto;
       const b = buttons.get(card);
@@ -199,7 +202,7 @@
     });
     for (const sel of SEEDS) {
       document.querySelectorAll(sel).forEach((seed) => {
-        if (seed.closest("[data-xcs-post]")) return; // đã thuộc một bài
+        if (seed.closest("[data-xcs-post]") || inChat(seed)) return; // đã thuộc một bài / tin nhắn chat
         if (seed.matches('[role="article"]') && COMMENT_RE.test(seed.getAttribute("aria-label") || "")) return; // bình luận
         const card = cardOf(seed, sel);
         if (card.closest("[data-xcs-post]") || card.querySelector("[data-xcs-post]")) return;
@@ -230,6 +233,10 @@
     .w .b { position: static; display: block; text-align: center; }
     .xb { background: #0f1419; border-color: #0f1419; color: #fff; }
     .xb:hover { background: #272c30; }
+    .vd { position: fixed; display: none; z-index: 2; padding: 5px 10px; border-radius: 999px; border: 0; background: rgba(0,0,0,.62);
+      color: #fff; font: 600 12px/1.2 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; cursor: pointer; white-space: nowrap; }
+    .vd:hover { background: rgba(0,0,0,.82); }
+    .vd.done { background: #00875a; }
 
     /* ---------- Bảng "Tạo bài viết cho X" ---------- */
     .fx { --bg: #fff; --fg: #0f1419; --mut: #536471; --line: #e3e7ea; --soft: #f5f8fa; --acc: #1d9bf0; --ok: #00875a; --bad: #d4183d;
@@ -363,7 +370,78 @@
       // Cuộn tới đáy bài (đáy bài đã vào màn hình) = đã đọc hết: tự lưu.
       if (autoBottom && !post.dataset.xcsAuto && r.bottom <= innerHeight - 8 && r.bottom > 60) autoSave(post, b.querySelector(".save"));
     }
+    placeVideos();
   }
+  // ---------- Nút "⬇ Tải video" ở góc trên trái mỗi video (bài trên bảng tin, reel, trang video) ----------
+  // Link MP4 do fbhook.js (trong trang) bắt được, theo id video; khung phát video có data-video-id.
+  const vids = new Map(); // id -> { hd, sd }
+  addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== window || !m || m.source !== "xcs-fb" || m.type !== "videos" || !Array.isArray(m.items)) return;
+    for (const v of m.items) if (v && v.id) vids.set(String(v.id), { hd: v.hd || "", sd: v.sd || "" });
+  });
+  window.postMessage({ source: "xcs-fb-ask" }, location.origin); // xin lại các video đã có trước khi script này chạy
+  const vbtns = new Map(); // khung video -> nút
+  function findPlayers() {
+    for (const el of document.querySelectorAll("[data-video-id]")) {
+      if (vbtns.has(el) || inChat(el) || !el.dataset.videoId) continue;
+      const b = document.createElement("button");
+      b.className = "vd";
+      b.textContent = "⬇ Tải video";
+      b.title = "Tải video này về máy (MP4, HD nếu có)";
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        downloadVideo(el.dataset.videoId, b);
+      });
+      layer.appendChild(b);
+      vbtns.set(el, b);
+    }
+  }
+  function placeVideos() {
+    for (const [el, b] of vbtns) {
+      if (!el.isConnected) {
+        b.remove();
+        vbtns.delete(el);
+        continue;
+      }
+      const r = el.getBoundingClientRect();
+      if (r.width < 120 || r.height < 90 || r.bottom < 40 || r.top > innerHeight - 30) {
+        b.style.display = "none";
+        continue;
+      }
+      b.style.display = "block";
+      // góc trên phải (góc trái có nút tắt tiếng của reel)
+      b.style.left = `${Math.max(4, Math.min(innerWidth, r.right) - (b.offsetWidth || 90) - 8)}px`;
+      b.style.top = `${Math.max(60, r.top + 8)}px`; // không đè thanh trên cùng của Facebook
+    }
+  }
+  async function downloadVideo(id, b) {
+    let v = vids.get(id);
+    if (!v) {
+      window.postMessage({ source: "xcs-fb-ask" }, location.origin);
+      await new Promise((r) => setTimeout(r, 600));
+      v = vids.get(id);
+    }
+    if (!v) {
+      b.textContent = "Chưa có link: bấm phát video rồi thử lại";
+      setTimeout(() => (b.textContent = "⬇ Tải video"), 4000);
+      return;
+    }
+    const q = v.hd ? "HD" : "SD";
+    const name = (curPage() || (location.pathname.match(/^\/([\w.]+)/) || [])[1] || "facebook").replace(/[^\w.-]/g, "_");
+    b.textContent = "Đang tải...";
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "fb-download-video", url: v.hd || v.sd, filename: `facebook-video/${name}_${id}_${q}.mp4` });
+      if (res && res.ok) {
+        b.textContent = `✓ Đã tải (${q})`;
+        b.classList.add("done");
+      } else b.textContent = `Lỗi: ${(res && res.error) || "không tải được"}`;
+    } catch (_) {
+      b.textContent = "Extension vừa cập nhật: F5 trang này";
+    }
+  }
+
   let placing = false;
   function schedulePlace() {
     if (placing) return;
@@ -785,6 +863,7 @@
     if (!chrome.runtime?.id) return;
     const here = curPage();
     if (here) showBadge();
+    findPlayers();
     for (const post of findPosts()) {
       const btn = buttonFor(post);
       // Tự lưu bài của page trong danh sách (trên trang của page hoặc trên bảng tin).

@@ -535,6 +535,7 @@
       ${p.why ? `<div class="why">${esc(p.why)}</div>` : ""}
       <div class="meta"><span class="cnt"></span><span class="grow"></span><span class="ok" data-el="done"></span></div>
       <div class="acts"><button data-a="copy" data-i="${i}">📋 Chép</button><button class="dark" data-a="post" data-i="${i}">𝕏 Đăng lên X</button>
+        <button data-a="sched" data-i="${i}" title="Mở X, điền bài và tự chọn giờ hẹn kế tiếp">⏰ Hẹn giờ</button>
         <button data-a="redo" data-i="${i}">🔄 Viết lại</button></div></div>`;
   }
 
@@ -547,7 +548,23 @@
       ${posts.map(cardHtml).join("")}
       <div class="note">Viết bởi ${esc(provider)}${model ? ` · ${esc(model)}` : ""}</div>`;
     fxBody.querySelectorAll("textarea").forEach(fit);
-    fxFoot.innerHTML = `<button data-a="all">🔁 Viết lại tất cả</button><button data-a="setup">🎯 Đổi mục tiêu</button><span class="grow"></span><button data-a="discard">🗑 Bỏ hết</button>`;
+    fxFoot.innerHTML = `<button data-a="all">🔁 Viết lại tất cả</button><button data-a="setup">🎯 Đổi mục tiêu</button><span class="grow"></span><span class="sched-n"></span><label title="Mỗi bài hẹn giờ cách mọi bài đã hẹn ít nhất bao nhiêu phút">⏰ cách <input type="number" class="gap" min="5" max="1440" step="5" value="60" style="width:56px"> phút</label><button data-a="discard">🗑 Bỏ hết</button>`;
+    try {
+      chrome.storage.local.get({ schedGapMin: 60, schedList: [] }, ({ schedGapMin, schedList }) => {
+        const g = fxFoot.querySelector("input.gap");
+        if (g) g.value = schedGapMin;
+        const list = schedList.filter((x) => x.at > Date.now());
+        const n = fxFoot.querySelector(".sched-n");
+        if (n && list.length) {
+          n.textContent = `📅 ${list.length} bài đã hẹn`;
+          n.title = list
+            .map((x) => `${new Date(x.at).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}  ${x.text.slice(0, 60)}`)
+            .join("\n");
+        }
+      });
+    } catch (_) {
+      // extension vừa tải lại
+    }
   }
 
   // Ô chữ tự cao theo nội dung + đếm ký tự theo cách X tính (280).
@@ -560,6 +577,7 @@
     c.textContent = `${n}/280${n > 280 ? " · quá dài" : ""}`;
     c.classList.toggle("over", n > 280);
     card.querySelector('[data-a="post"]').disabled = n > 280 || !ta.value.trim();
+    card.querySelector('[data-a="sched"]').disabled = n > 280 || !ta.value.trim();
   }
 
   function textOf(i) {
@@ -642,6 +660,15 @@
   fx.addEventListener("input", (e) => {
     if (e.target.matches("textarea")) fit(e.target);
     if (e.target.matches("input.hint")) S.hint = e.target.value;
+    if (e.target.matches("input.gap")) {
+      const v = Math.round(Number(e.target.value));
+      if (v >= 5 && v <= 1440)
+        try {
+          chrome.storage.local.set({ schedGapMin: v });
+        } catch (_) {
+          // extension vừa tải lại
+        }
+    }
   });
   fx.addEventListener("click", async (e) => {
     const g = e.target.closest("[data-goal]");
@@ -692,6 +719,22 @@
         if (!t) break;
         window.open(`https://x.com/intent/post?text=${encodeURIComponent(t)}`, "_blank", "noopener");
         flash(i, "✓ Đã mở X, bấm Đăng ở đó");
+        pick(i, "post");
+        break;
+      }
+      case "sched": {
+        // Ghi bài chờ hẹn giờ; trang X (content.js) sẽ mở bảng Schedule và tự chọn giờ kế tiếp.
+        const t = textOf(i);
+        if (!t) break;
+        try {
+          await chrome.storage.local.set({ schedPending: { text: t, ts: Date.now() } });
+        } catch (_) {
+          flash(i, "Extension vừa cập nhật: F5 trang này");
+          break;
+        }
+        // Mở trang chủ X (không dùng /intent/post: trang đó tải lại khung soạn sau khi Confirm nên mất giờ hẹn).
+        window.open("https://x.com/home", "_blank", "noopener");
+        flash(i, "✓ Đã mở X, đang chọn giờ hẹn");
         pick(i, "post");
         break;
       }

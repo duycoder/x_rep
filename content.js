@@ -322,7 +322,7 @@
     const sum = (k, n) => Array.from({ length: n }, (_, i) => day(i)[k] || 0).reduce((a, b) => a + b, 0);
     const row = (label, k) => `<tr><td>${label}</td><td class="today">${day(0)[k] || 0}</td><td>${day(1)[k] || 0}</td><td>${sum(k, 7)}</td></tr>`;
     return `<table><tr><th>Giờ VN</th><th>Hôm nay</th><th>Hôm qua</th><th>7 ngày</th></tr>
-      ${row("📝 Bài đăng", "post")}${row("💬 Trả lời", "reply")}
+      ${row("📝 Bài đăng", "post")}${row("💬 Trả lời", "reply")}${row("➕ Follow", "follow")}${row("➖ Bỏ follow", "unfollow")}
       <tr><td title="Số lần bạn đăng câu lấy từ gợi ý của extension">🤖 Dùng gợi ý</td><td class="today">${(day(0).post_ai || 0) + (day(0).reply_ai || 0)}</td><td>${(day(1).post_ai || 0) + (day(1).reply_ai || 0)}</td><td>${sum("post_ai", 7) + sum("reply_ai", 7)}</td></tr></table>`;
   }
   // Bảng đếm luôn hiện ở góc trên bên phải trang X; kéo để dời chỗ (nhớ vị trí, kho "dockPos").
@@ -332,7 +332,7 @@
   function renderDock() {
     chrome.storage.local.get({ activity: {}, activityLast: null, dockPos: { x: null, y: null } }, ({ activity, activityLast: last, dockPos: dockState }) => {
       const t = activity[vnDay()] || {};
-      dockPill.innerHTML = `<span>Hôm nay: 📝 <b>${t.post || 0}</b> bài · 💬 <b>${t.reply || 0}</b> trả lời</span><button class="newpost" title="Viết bài mới (Alt+P)">✍️ Gợi ý bài</button>`;
+      dockPill.innerHTML = `<span>Hôm nay: 📝 <b>${t.post || 0}</b> bài · 💬 <b>${t.reply || 0}</b> trả lời · ➕ <b>${t.follow || 0}</b> follow</span><button class="newpost" title="Viết bài mới (Alt+P)">✍️ Gợi ý bài</button>`;
       const hm = (ts) => new Date(ts).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
       dockStats.innerHTML =
         statsTable(activity) +
@@ -462,6 +462,150 @@
       myImages: m.media || []
     });
   }
+  // ---------- Hẹn giờ đăng ----------
+  // Nhớ các bài đã hẹn (schedList: [{at, text}]) từ chính X: lúc bạn bấm Schedule thành công,
+  // và lúc X tải trang "Scheduled posts" (danh sách đầy đủ: thay hẳn, nên bài bạn xoá/sửa giờ cũng được cập nhật).
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== window || !m || m.source !== "xcs-hook" || m.type !== "sched" || !Array.isArray(m.items)) return;
+    try {
+      chrome.storage.local.get({ schedList: [] }, ({ schedList }) => {
+        const now = Date.now();
+        let list = m.action === "list" ? m.items : [...schedList, ...m.items];
+        const seen = new Set();
+        list = list
+          .filter((x) => x && x.at > now && !seen.has(x.at) && seen.add(x.at))
+          .sort((a, b) => a.at - b.at)
+          .slice(0, 200);
+        chrome.storage.local.set({ schedList: list });
+      });
+    } catch (_) {
+      // extension vừa tải lại
+    }
+  });
+
+  // Giờ hẹn kế tiếp: sớm nhất có thể (ít nhất 15 phút từ bây giờ, tròn 5 phút) mà cách MỌI bài đã hẹn
+  // ít nhất gapMin phút (mặc định 60). Vd đã hẹn 13:30 → không chọn 13:22 hay 13:40; chỗ trống giữa hai bài vẫn dùng được.
+  function nextSlot(list, gapMin) {
+    const step = 5 * 60e3;
+    const gap = gapMin * 60e3;
+    const up = (t) => Math.ceil(t / step) * step;
+    const ats = list.map((x) => x.at).sort((a, b) => a - b);
+    let at = up(Date.now() + 15 * 60e3);
+    for (let guard = 0; guard < 500; guard++) {
+      const clash = ats.find((s) => Math.abs(at - s) < gap);
+      if (clash == null) break;
+      at = up(clash + gap);
+    }
+    return new Date(at);
+  }
+
+  // Chọn một ô <select> của React: đặt giá trị bằng setter gốc rồi báo "change" để X cập nhật.
+  function setSelect(sel, want, byIndex) {
+    const opts = [...sel.options].filter((o) => o.value !== "");
+    const o = byIndex != null ? opts[byIndex] : opts.find((x) => Number(x.value) === want);
+    if (!o) return false;
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(sel, o.value);
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  // Nhận ra từng ô theo các lựa chọn bên trong (không phụ thuộc ngôn ngữ giao diện X).
+  function scheduleSelects(dlg) {
+    const out = {};
+    const twelves = [];
+    for (const s of dlg.querySelectorAll("select")) {
+      const vals = [...s.options].map((o) => o.value).filter((v) => v !== "");
+      if (vals.length === 2) out.ampm = s;
+      else if (vals.length >= 55) out.minute = s;
+      else if (vals.some((v) => /^\d{4}$/.test(v))) out.year = s;
+      else if (vals.length >= 28 && vals.length <= 31) out.day = s;
+      else if (vals.length >= 23 && vals.length <= 24) out.hour24 = s;
+      else if (vals.length === 12) twelves.push(s);
+    }
+    out.month = twelves[0]; // ô ngày nằm trước ô giờ
+    if (twelves[1]) out.hour = twelves[1];
+    return out;
+  }
+
+  // Mở khung soạn bài thường (nút Post bên trái), điền bài, rồi mở bảng Schedule trong chính khung đó.
+  async function runScheduled(p) {
+    const newBtn = await waitFor(() => document.querySelector('[data-testid="SideNav_NewTweet_Button"]'), 15000);
+    if (!newBtn) return toast("Không thấy nút Post của X để mở khung soạn bài.");
+    newBtn.click();
+    const box = await waitFor(() => document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]'), 8000);
+    if (!box) return toast("Không mở được khung soạn bài.");
+    await new Promise((r) => setTimeout(r, 300));
+    if (!(await insertText(box, p.text))) {
+      await navigator.clipboard.writeText(p.text).catch(() => {});
+      toast("Chưa điền được bài: đã sao chép, bấm vào ô soạn rồi Ctrl+V.");
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    const btn = await waitFor(() => document.querySelector('[role="dialog"] [data-testid="scheduleOption"]'), 8000);
+    if (!btn) return toast("Không thấy nút Hẹn giờ của X: bấm biểu tượng lịch trong khung soạn bài.");
+    btn.click();
+    const dlg = await waitFor(() => [...document.querySelectorAll('[role="dialog"]')].find((d) => d.querySelectorAll("select").length >= 5), 8000);
+    if (!dlg) return toast("Không mở được bảng Hẹn giờ của X.");
+    const { schedList = [], schedGapMin = 60 } = await chrome.storage.local.get({ schedList: [], schedGapMin: 60 });
+    const at = nextSlot(schedList.filter((x) => x.at > Date.now()), schedGapMin);
+    const h = at.getHours();
+    // Năm → tháng → ngày trước (số ngày phụ thuộc tháng); mỗi bước tìm lại ô vì X vẽ lại.
+    const steps = [
+      ["year", at.getFullYear()],
+      ["month", at.getMonth() + 1],
+      ["day", at.getDate()],
+      ["hour24", h],
+      ["hour", h % 12 || 12],
+      ["minute", at.getMinutes()],
+      ["ampm", null, h < 12 ? 0 : 1]
+    ];
+    let ok = true;
+    for (const [k, v, idx] of steps) {
+      const s = scheduleSelects(dlg)[k];
+      if (!s) continue;
+      if (!setSelect(s, v, idx)) ok = false;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    const when = at.toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
+    toast(ok ? `⏰ Đã chọn ${when}. Kiểm tra rồi bấm Confirm, sau đó Schedule.` : `Chọn giờ chưa trọn (${when}): kiểm tra lại các ô.`);
+  }
+
+  try {
+    chrome.storage.local.get({ schedPending: null }, ({ schedPending: p }) => {
+      if (!p || Date.now() - p.ts > 120e3 || location.pathname !== "/home") return;
+      chrome.storage.local.remove("schedPending");
+      runScheduled(p).catch((e) => toast(`Hẹn giờ lỗi: ${e.message}`));
+    });
+  } catch (_) {
+    // extension vừa tải lại
+  }
+
+  // Đếm follow / bỏ follow theo ngày giờ VN. Ghi lần lượt (bấm follow liền tay nhiều người không bị mất số).
+  let followQ = Promise.resolve();
+  window.addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.source !== window || !m || m.source !== "xcs-hook" || m.type !== "follow") return;
+    const k = m.action === "unfollow" ? "unfollow" : "follow";
+    followQ = followQ.then(
+      () =>
+        new Promise((done) => {
+          try {
+            chrome.storage.local.get({ activity: {} }, ({ activity }) => {
+              const d = vnDay();
+              const rec = (activity[d] = activity[d] || { post: 0, reply: 0, post_ai: 0, reply_ai: 0 });
+              rec[k] = (rec[k] || 0) + 1;
+              const list = new Set(rec.followed || []); // ai đã follow hôm nay (bỏ follow thì gỡ ra)
+              if (k === "follow") list.add(m.user);
+              else list.delete(m.user);
+              rec.followed = [...list].slice(-1000);
+              chrome.storage.local.set({ activity }, done);
+            });
+          } catch (_) {
+            done(); // extension vừa tải lại
+          }
+        })
+    );
+  });
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (e.source !== window || !m || m.source !== "xcs-hook" || m.type !== "tweet-created") return;

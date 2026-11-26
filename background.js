@@ -921,25 +921,37 @@ function buildFbStylePrompt(args) {
   const { settings, extraHint } = args;
   const ex = settings.stylePosts || [];
   const system = [
-    `Bạn viết BÀI ĐĂNG MẠNG XÃ HỘI MỚI theo đúng phong cách của một page Facebook viết hay. Viết đúng ${settings.count} bài.`,
+    `Bạn chuyển giọng văn của một page Facebook viết hay thành BÀI ĐĂNG X (Twitter) MỚI. Viết đúng ${settings.count} bài.`,
+    "MỤC TIÊU SỐ 1: được hiển thị trên timeline X nhiều nhất có thể (organic impressions). Mọi quy tắc khác phục vụ mục tiêu này.",
     "",
-    "HỌC TỪ CÁC BÀI MẪU BÊN DƯỚI: cách mở bài, độ dài, nhịp câu, cách xuống dòng, cách xưng hô với người đọc, cách kết, mức dùng emoji và chữ in hoa.",
-    "Bài mẫu có cả câu nói ngắn (quote) lẫn bài dài: các bài viết ra cũng nên trộn dài ngắn như vậy.",
+    "HỌC TỪ BÀI MẪU: giọng, cách xưng hô, nhịp câu, cách kể, mức dùng emoji. Nhưng viết cho X: vào thẳng ý, gọn hơn bài Facebook.",
     "",
-    "QUY TẮC:",
-    "1. TUYỆT ĐỐI KHÔNG chép câu chữ, ý chính hay câu chuyện của bài mẫu. Ý mới, ví dụ mới, câu mới.",
-    "2. Không bịa tin tức, số liệu, tên bệnh viện, tên người thật, kết quả nghiên cứu. Không viết kiểu \"Theo báo...\".",
-    "3. Không chính trị, tôn giáo, thù ghét; không nói xấu người hay thương hiệu cụ thể.",
-    "4. Không tag, không link, không hashtag (trừ khi yêu cầu thêm bảo có).",
-    "5. Mỗi bài một ý và một cách mở bài khác nhau.",
-    "6. ĐỘ DÀI: bài vừa đến dài, mỗi bài 80–250 chữ, chia 2–5 đoạn như bài mẫu dài. Nhiều nhất 1 bài là câu nói ngắn. TUYỆT ĐỐI không trả về các câu một dòng kiểu tiêu đề.",
+    "CÁCH VIẾT ĐỂ ĐƯỢC HIỂN THỊ NHIỀU:",
+    "1. CÂU MỞ ĐẦU là quan trọng nhất: phải giữ được người đang lướt ngay từ câu đầu. Vào thẳng một nhận định bất ngờ, một khoảnh khắc cụ thể, hoặc một sự thật ai cũng từng gặp. Không chào, không dẫn dắt, không mở bài dài.",
+    "2. KHOẢNG TÒ MÒ: khoảng 200 ký tự đầu (phần X hiện trước nút \"Hiện thêm\") phải khiến người ta muốn đọc tiếp: hé ra điều sắp nói nhưng chưa nói hết. Ý đắt nhất để ở sau, không giải thích hết ngay câu đầu.",
+    "3. CHỦ ĐỀ RỘNG, GẦN GŨI: chuyện thường ngày ai cũng thấy mình trong đó (đi làm, tiền lương, gia đình, bạn bè, tuổi tác, sức khoẻ, thói quen). Tránh chủ đề ngách chỉ một nhóm nhỏ hiểu.",
+    "4. ĐÚNG THỜI ĐIỂM: nếu tự nhiên thì gắn với thời điểm hiện tại (ngày trong tuần, mùa, dịp lễ, cuối tháng...). Không gượng ép.",
+    "5. ĐOẠN NGẮN: mỗi đoạn 1–2 câu, xuống dòng giữa các đoạn để đọc lướt trên điện thoại. Không có đoạn nào là một khối chữ dài.",
+    "6. ĐỘ DÀI: phần lớn bài 40–150 chữ. Được có 1 bài thật ngắn (1–3 câu, dưới 280 ký tự) nếu câu đó đủ mạnh.",
+    "7. GIỌNG NGƯỜI THẬT, KHÔNG GIỐNG AI VIẾT: câu có độ dài khác nhau, có chi tiết cụ thể, có cảm xúc thật. Không dùng các mở bài, kết bài sáo kiểu \"Trong cuộc sống hối hả\", \"Hãy nhớ rằng\", \"Bài học rút ra là\", \"Cuộc sống mà\". Không liệt kê 1-2-3 đều tăm tắp, không emoji đầu mỗi dòng.",
+    "",
+    "TRÁNH (làm giảm lượt hiển thị hoặc bị coi là câu tương tác):",
+    "- Câu hỏi gượng ép ở cuối (\"Bạn nghĩ sao?\", \"Bạn có đồng ý không?\", \"Còn bạn thì sao?\"). Chỉ hỏi khi câu hỏi là một phần tự nhiên của câu chuyện.",
+    "- Câu xin tương tác: \"Like nếu...\", \"Share cho...\", \"Comment 1...\", \"Tag người...\", \"Lưu lại kẻo trôi\", \"Follow để...\".",
+    "- Hashtag, link, tag tên người.",
+    "",
+    "QUY TẮC NỘI DUNG:",
+    "- TUYỆT ĐỐI KHÔNG chép câu chữ, ý chính hay câu chuyện của bài mẫu. Ý mới, ví dụ mới, câu mới.",
+    "- Không bịa tin tức, số liệu, tên bệnh viện, tên người thật, kết quả nghiên cứu. Không viết kiểu \"Theo báo...\".",
+    "- Không chính trị, tôn giáo, thù ghét; không nói xấu người hay thương hiệu cụ thể.",
+    "- Mỗi bài một ý và một kiểu câu mở đầu khác nhau.",
     "",
     ex.length
       ? `BÀI MẪU CỦA PAGE (${ex.length} bài):\n` + ex.map((x, i) => `--- Bài ${i + 1} ---\n${x.text.trim().slice(0, 900)}`).join("\n")
       : "(Chưa có bài mẫu: viết kiểu page truyền cảm hứng, tư duy sống, giọng chín chắn, gần gũi.)",
     "",
     'Chỉ trả về JSON đúng dạng {"context": "...", "suggestions": ["...", "..."], "images": ["...", "..."]}, không thêm chữ nào khác.',
-    '"context": MỘT câu ngắn tiếng Việt nói các ý bạn chọn. "images": mảng cùng độ dài, mỗi phần tử là ảnh minh hoạ bằng TIẾNG ANH dạng "từ khoá | mô tả 8-15 từ", không có chữ trong ảnh.'
+    '"context": MỘT câu ngắn tiếng Việt nói các ý bạn chọn và câu mở đầu dùng chiêu gì để giữ người lướt. "images": mảng cùng độ dài, mỗi phần tử là ảnh minh hoạ bằng TIẾNG ANH dạng "từ khoá | mô tả 8-15 từ", không có chữ trong ảnh.'
   ].join("\n");
   const user = [
     `Thời điểm hiện tại: ${nowContext()}`,
@@ -1428,6 +1440,7 @@ async function warmOllama() {
       model: settings.ollamaModel || DEFAULTS.ollamaModel,
       messages: [{ role: "system", content: system }, { role: "user", content: "ok" }],
       stream: false,
+      think: false, // model có suy nghĩ (Qwen 3.5, Gemma 4): tắt cho nhanh
       keep_alive: OLLAMA_KEEP,
       options: { ...OLLAMA_OPTS, num_predict: 1 }
     })
@@ -1471,6 +1484,7 @@ async function callOllama(payload, settings) {
         stream: false,
         // Bài đăng: đưa khuôn JSON cụ thể, model nhỏ chỉ được bảo "json" hay trả về {} rỗng.
         format: payload.mode === "raw" ? payload.schema || "json" : payload.mode === "post" ? POST_SCHEMA : "json",
+        think: false, // model có suy nghĩ (Qwen 3.5, Gemma 4): tắt cho nhanh
         keep_alive: OLLAMA_KEEP, // giữ model trong RAM cho lần sau nhanh hơn
         options:
           payload.mode === "raw"
@@ -1745,6 +1759,7 @@ async function callOllamaTuned(payload, settings) {
           model: settings.ollamaModel,
           messages: [{ role: "user", content }],
           stream: false,
+          think: false, // model có suy nghĩ (Qwen 3.5, Gemma 4): tắt cho nhanh
           keep_alive: OLLAMA_KEEP,
           options: { ...TUNED_OPTS, seed: Math.floor(Math.random() * 1e9) }
         })
@@ -1783,10 +1798,49 @@ const FB_HOOKS = [
   "Đọc sách không làm bạn giàu ngay",
   "Ai rồi cũng phải học cách buông bỏ",
   "Lòng tốt cũng cần có giới hạn",
-  "Bản lĩnh của một người thể hiện ở"
+  "Bản lĩnh của một người thể hiện ở",
+  // Chuyện thường ngày ai cũng gặp: dễ được hiển thị rộng trên X
+  "Lương về được ba ngày thì",
+  "Hồi nhỏ mình cứ nghĩ",
+  "Đi làm mấy năm mới hiểu",
+  "Cuối tuần chỉ muốn",
+  "Có một kiểu mệt mà ngủ bao nhiêu cũng không hết",
+  "Điều mình tiếc nhất tuổi 20 là"
 ];
 function shuffled(a) {
   return a.map((x) => [Math.random(), x]).sort((p, q) => p[0] - q[0]).map((x) => x[1]);
+}
+// Gọt bài đăng (chuyển từ phong cách page Facebook) cho hợp X: bỏ hashtag, câu xin tương tác,
+// câu hỏi gượng ép ở cuối; tách đoạn dài thành đoạn 1–2 câu cho dễ đọc lướt.
+const BAIT_RE =
+  /^\W{0,4}(hãy\s+)?(like|share|chia sẻ|comment|cmt|bình luận|tag|thả tim|follow|theo dõi|lưu lại|gõ\s*["“]?\d)\b.{0,80}(nếu|để|ngay|cho (bạn|người)|bên dưới|nhé|nha|kẻo)/i;
+const FORCED_Q_RE = /^\W{0,4}(còn )?(các )?bạn (nghĩ|thấy) (sao|thế nào)|^\W{0,4}bạn có (đồng ý|đồng tình|như vậy|giống mình)|^\W{0,4}còn (các )?bạn( thì)? (sao|thế nào)/i;
+function forX(text) {
+  const src = String(text || "");
+  let lines = src
+    .replace(/(^|\s)#[\p{L}\p{N}_]+/gu, "$1") // hashtag
+    .split("\n")
+    .map((l) => l.replace(/[ \t]+$/, ""));
+  lines = lines.filter((l) => !(l.trim().length < 120 && BAIT_RE.test(l.trim())));
+  // Câu hỏi gượng ép nằm riêng ở dòng cuối
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    if (l.length < 70 && /\?\s*\W*$/.test(l) && FORCED_Q_RE.test(l)) lines.splice(i, 1);
+    break;
+  }
+  const paras = lines.join("\n").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const out = [];
+  for (const p of paras) {
+    const sents = p.match(/[^.!?…\n]+[.!?…]+["”']?|[^.!?…\n]+$/g) || [p];
+    if (p.includes("\n") || p.length <= 220 || sents.length <= 2) {
+      out.push(p);
+      continue;
+    }
+    for (let i = 0; i < sents.length; i += 2) out.push(sents.slice(i, i + 2).join(" ").replace(/\s+/g, " ").trim());
+  }
+  const res = out.join("\n\n").trim();
+  return res.length >= 15 ? res : src.trim();
 }
 // Model nhỏ đôi khi viết lan man không dừng: bỏ chữ nút Facebook, cắt ở cuối câu, tối đa ~1200 ký tự.
 function tidyFbPost(t, cut) {
@@ -2239,6 +2293,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             const c = cleanPosts(r.suggestions, r.images, msg.extraHint);
             out = c.posts;
             r.images = c.images;
+            if (msg.fbStyle) out = out.map(forX); // chuyển từ page Facebook sang X: gọt cho được hiển thị nhiều
             if (!out.length) throw new Error("Model trả về bài rỗng");
           } else out = r.suggestions.map((x) => applyStyle(x, settings.profile));
           if (!isPost && msg.onMyPost) out = shortOwnReplies(out, msg.text, count);

@@ -75,5 +75,7 @@ chrome.storage.local.get({ activity: {} }, ({ activity }) => {
   document.getElementById("stats").innerHTML = `<table><tr><th>Giờ VN</th><th>Hôm nay</th><th>Hôm qua</th><th>7 ngày</th></tr>
     ${row("📝 Bài đăng", (d) => d.post || 0, sum("post"))}
     ${row("💬 Trả lời", (d) => d.reply || 0, sum("reply"))}
+    ${row("➕ Follow", (d) => d.follow || 0, sum("follow"))}
+    ${row("➖ Bỏ follow", (d) => d.unfollow || 0, sum("unfollow"))}
     ${row("🤖 Dùng gợi ý", (d) => (d.post_ai || 0) + (d.reply_ai || 0), sum("post_ai") + sum("reply_ai"))}</table>`;
 });

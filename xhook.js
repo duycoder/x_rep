@@ -9,6 +9,66 @@
   // để biết một bình luận đang trả lời bài nào (vd bình luận dưới bài của chính bạn) và bài đó viết gì.
   const READ_RE =
     /\/graphql\/[^/]+\/(TweetDetail|NotificationsTimeline|HomeTimeline|HomeLatestTimeline|UserTweets|UserTweetsAndReplies|SearchTimeline|TweetResultByRestId|TweetResultsByRestIds)(\?|$)|\/2\/notifications\//;
+  // Lệnh follow / bỏ follow mà X gửi khi bạn bấm nút Follow (ở trang cá nhân, thẻ hover, "Gợi ý theo dõi"...).
+  const FOLLOW_RE = /\/i\/api\/1\.1\/friendships\/(create|destroy)\.json(\?|$)/;
+  function reportFollow(url, responseText) {
+    try {
+      const m = String(url).match(FOLLOW_RE);
+      const u = JSON.parse(responseText || "{}");
+      if (!m || !u || (!u.id_str && !u.screen_name)) return; // X từ chối (quá giới hạn follow...)
+      window.postMessage(
+        { source: "xcs-hook", type: "follow", action: m[1] === "create" ? "follow" : "unfollow", user: u.screen_name || u.id_str },
+        location.origin
+      );
+    } catch (_) {
+      // dữ liệu lạ: bỏ qua
+    }
+  }
+  // Hẹn giờ đăng: bài vừa hẹn (CreateScheduledTweet) và danh sách bài đang hẹn (FetchScheduledTweets),
+  // để extension biết giờ hẹn muộn nhất và tự chọn giờ kế tiếp.
+  const SCHED_RE = /\/graphql\/[^/]+\/(CreateScheduledTweet|FetchScheduledTweets)(\?|$)/;
+  const toMs = (x) => {
+    const n = Number(x);
+    return n > 0 ? (n < 1e12 ? n * 1000 : n) : 0;
+  };
+  function reportSched(url, bodyText, responseText) {
+    try {
+      const m = String(url).match(SCHED_RE);
+      const res = JSON.parse(responseText || "{}");
+      if (!m || (res.errors && res.errors.length)) return;
+      if (m[1] === "CreateScheduledTweet") {
+        let v = null;
+        try {
+          v = JSON.parse(bodyText || "{}").variables || {};
+        } catch (_) {
+          v = {};
+        }
+        const at = toMs(v && v.execute_at);
+        const text = String((v && v.post_tweet_request && v.post_tweet_request.status) || "").slice(0, 300);
+        if (at) window.postMessage({ source: "xcs-hook", type: "sched", action: "created", items: [{ at, text }] }, location.origin);
+        return;
+      }
+      // Danh sách đầy đủ bài đang hẹn (mỗi bài: scheduling_info.execute_at + tweet_create_request.status).
+      const items = [];
+      const walk = (o, d) => {
+        if (!o || typeof o !== "object" || d > 40) return;
+        if (Array.isArray(o)) return o.forEach((x) => walk(x, d + 1));
+        const si = o.scheduling_info;
+        if (si && si.execute_at != null) {
+          const at = toMs(si.execute_at);
+          const text = String((o.tweet_create_request && o.tweet_create_request.status) || "").slice(0, 300);
+          if (at) items.push({ at, text });
+          return;
+        }
+        if (o.execute_at != null && toMs(o.execute_at)) items.push({ at: toMs(o.execute_at), text: "" });
+        for (const k in o) walk(o[k], d + 1);
+      };
+      walk(res.data, 0);
+      window.postMessage({ source: "xcs-hook", type: "sched", action: "list", items }, location.origin);
+    } catch (_) {
+      // dữ liệu lạ: bỏ qua
+    }
+  }
   const clean = (t) => String(t || "").replace(/^(@\w+\s+)+/, "").replace(/\s*https:\/\/t\.co\/\w+\s*$/, "").trim().slice(0, 1000);
   function harvest(text) {
     try {
@@ -71,6 +131,24 @@
   const origFetch = window.fetch;
   window.fetch = function (input, init) {
     const url = typeof input === "string" ? input : input && (input.url || String(input));
+    if (url && FOLLOW_RE.test(url)) {
+      const fp = origFetch.apply(this, arguments);
+      fp.then((r) => (r.ok ? r.clone().text() : null)).then((t) => t && reportFollow(url, t)).catch(() => {});
+      return fp;
+    }
+    if (url && SCHED_RE.test(url)) {
+      const sb =
+        init && init.body != null
+          ? Promise.resolve(typeof init.body === "string" ? init.body : null)
+          : input && typeof input.clone === "function"
+            ? input.clone().text().catch(() => null)
+            : Promise.resolve(null);
+      const sp = origFetch.apply(this, arguments);
+      Promise.all([sb, sp.then((r) => (r.ok ? r.clone().text() : null))])
+        .then(([b, t]) => t && reportSched(url, b, t))
+        .catch(() => {});
+      return sp;
+    }
     if (url && READ_RE.test(url)) {
       const rp = origFetch.apply(this, arguments);
       rp.then((r) => (r.ok ? r.clone().text() : null)).then((t) => t && harvest(t)).catch(() => {});
@@ -98,6 +176,22 @@
     return origOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function (body) {
+    if (this.__xcsUrl && FOLLOW_RE.test(String(this.__xcsUrl))) {
+      const fu = String(this.__xcsUrl);
+      this.addEventListener("load", () => {
+        if (this.status < 200 || this.status >= 300) return;
+        if (this.responseType === "" || this.responseType === "text") reportFollow(fu, this.responseText);
+        else if (this.responseType === "json") reportFollow(fu, JSON.stringify(this.response));
+      });
+    }
+    if (this.__xcsUrl && SCHED_RE.test(String(this.__xcsUrl))) {
+      const su = String(this.__xcsUrl);
+      this.addEventListener("load", () => {
+        if (this.status < 200 || this.status >= 300) return;
+        if (this.responseType === "" || this.responseType === "text") reportSched(su, body, this.responseText);
+        else if (this.responseType === "json") reportSched(su, body, JSON.stringify(this.response));
+      });
+    }
     if (this.__xcsUrl && READ_RE.test(String(this.__xcsUrl))) {
       this.addEventListener("load", () => {
         if (this.status < 200 || this.status >= 300) return;

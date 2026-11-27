@@ -257,23 +257,35 @@ function questionOf(comment) {
   return "";
 }
 // Chủ bài đáp bình luận: bỏ emoji AI tự gắn, giữ câu đúng độ dài, thiếu thì bù bằng câu đáp quen thuộc.
-// Bình luận thường: câu đáp ngắn 1-4 chữ ("Dạ vâng ạ", "Hihi"). Bình luận có câu hỏi: phải trả lời thật, 2-14 chữ.
-const OWN_POOL = ["Dạ vâng ạ", "Hihi", "Được thui", "Chuẩn luôn", "Cảm ơn nha", "Hehe", "Ok nhé", "Đúng rồi á", "Nhất trí", "Haha thật"];
-const OWN_POOL_Q = ["Hihi bí mật nha", "Để mình nghĩ đã nè", "Chắc nằm nhà chill thôi á"];
+// Mục tiêu là giữ cuộc trò chuyện tiếp tục (chủ bài đáp + người bình luận đáp lại là tín hiệu mạnh nhất trên X),
+// nên bỏ câu đáp cho có ("Dạ vâng ạ", "Hihi", "Chuẩn luôn"): mọi câu 3-20 chữ, có ý để người kia đáp tiếp.
+// Câu mẫu dự phòng (khi không có AI) hợp với gần như mọi bình luận và đều mở đường cho người kia nói tiếp.
+const OWN_POOL = [
+  "Haha bạn cũng vậy hả, kể nghe với",
+  "Đọc bình luận này thấy có đồng minh rồi 🤣",
+  "Chuẩn luôn, bạn gặp vụ này lâu chưa?",
+  "Vậy là không phải mình tui ha, bạn thường xử lý sao?",
+  "Nói trúng tim đen luôn á, bạn thì sao?",
+  "Thấy chưa, ai cũng từng vậy hết haha"
+];
+const OWN_POOL_Q = ["Hihi bí mật nha, mà bạn đoán thử xem?", "Để mình nghĩ đã nè, còn bạn thì sao?", "Chắc nằm nhà chill thôi á, bạn có gợi ý gì không?"];
 function ownPool(comment) {
   return [...(questionOf(comment) ? OWN_POOL_Q : OWN_POOL)].sort(() => Math.random() - 0.5);
 }
+// Câu đáp cho có: ngắn và chỉ là dạ / ok / cười / chuẩn / cảm ơn.
+const OWN_EMPTY_RE = /^(dạ|vâng|ok|oke|(hi|he|ha|kk)+|chuẩn|đúng|cảm ơn|được|nhất trí|thật|yes)(?!\p{L})/iu;
+const isEmptyOwn = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).length <= 4 && OWN_EMPTY_RE.test(String(t || "").trim());
 function shortOwnReplies(list, comment, count) {
   const strip = (t) => String(t || "").replace(/[\s\p{Extended_Pictographic}\uFE0F\u200D\p{Emoji_Modifier}]+$/u, "").trim();
   const q = !!questionOf(comment);
-  const [lo, hi] = q ? [2, 14] : [1, 4];
+  const [lo, hi] = [3, 20];
   const out = [];
   for (const t of list.map(strip)) {
     const n = t.split(/\s+/).filter(Boolean).length;
-    if (q && n <= 3 && /^(dạ|vâng|ok|hi|he|ha|chuẩn|đúng|cảm ơn|được|nhất trí)/i.test(t)) continue; // đáp cho có, không trả lời câu hỏi
+    if (isEmptyOwn(t)) continue; // đáp cho có, làm cuộc trò chuyện dừng lại
     if (n >= lo && n <= hi && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
   }
-  if (q && out.length) return out.slice(0, count); // câu trả lời thật của AI, không bù câu chung chung
+  if (out.length >= (q ? 1 : 2)) return out.slice(0, count); // câu thật của AI, không bù câu chung chung
   for (const t of ownPool(comment)) if (out.length < count && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t);
   return out.slice(0, count);
 }
@@ -290,7 +302,9 @@ function quickEmoji(text, i, emojis, light) {
 }
 
 function examplesBlock(examples) {
-  if (!examples || !examples.length) return "";
+  // Câu đáp cho có dưới bài của mình ("Hihi", "Dạ vâng ạ") không đưa vào làm mẫu: AI sẽ học theo kiểu đáp cụt đó.
+  examples = (examples || []).filter((e) => !(e.onMyPost && isEmptyOwn(e.reply)));
+  if (!examples.length) return "";
   const lines = examples.map((e) =>
     e.onMyPost
       ? `- Bình luận dưới bài của chính họ${e.myPost ? ` (bài: "${e.myPost.replace(/\s+/g, " ").slice(0, 80)}")` : ""}: "${e.post.replace(/\s+/g, " ").slice(0, 140)}"\n  Người dùng đáp: "${e.reply}"`
@@ -1035,16 +1049,27 @@ function buildPrompt(args) {
     args.onMyPost
       ? [
           "ĐÂY LÀ BÌNH LUẬN DƯỚI BÀI CỦA CHÍNH NGƯỜI DÙNG. Người dùng là chủ bài, đáp lại người bình luận (khác hẳn đi bình luận bài người khác).",
+          "MỤC TIÊU: giữ cuộc trò chuyện tiếp tục. Trên X, chủ bài đáp lại và người bình luận đáp tiếp là tín hiệu mạnh nhất để bài được đẩy rộng hơn; câu đáp cho có (\"Dạ vâng ạ\", \"Hihi\", \"Chuẩn luôn\", \"Cảm ơn bạn\") làm cuộc trò chuyện chết ngay.",
+          "Mỗi gợi ý phải cho người kia một lý do để đáp lại, nhưng tự nhiên như bạn bè nói chuyện, không giống đang xin tương tác.",
           ...(questionOf(text)
             ? [
                 `Người bình luận ĐANG HỎI chủ bài: "${questionOf(text)}"`,
-                "Chủ bài phải TRẢ LỜI THẬT câu hỏi đó, như đang nói chuyện với bạn: 3-12 chữ, nói cụ thể mình làm gì / nghĩ gì, có thể thêm hihi, haha, nè, á cho tự nhiên. Có thể hỏi lại ngắn ở cuối.",
-                "Ví dụ: hỏi \"tối nay bạn làm gì để sạc pin vậy?\" → \"Nằm cày phim với ăn vặt thôi á\", \"Đi ngủ sớm cho khỏe hihi\", \"Ra quán cà phê ngồi chill nè, còn bạn?\".",
+                "Chủ bài phải TRẢ LỜI THẬT câu hỏi đó, như đang nói chuyện với bạn: 4-18 chữ, nói cụ thể mình làm gì / nghĩ gì, có thể thêm hihi, haha, nè, á cho tự nhiên.",
+                "Phần lớn gợi ý trả lời xong thì hỏi lại một câu ngắn, cụ thể về chuyện của họ (không hỏi trống không \"còn bạn?\" ở mọi câu).",
+                "Ví dụ: hỏi \"tối nay bạn làm gì để sạc pin vậy?\" → \"Nằm cày phim với ăn vặt thôi á, bạn đang coi phim gì hay không?\", \"Đi ngủ sớm cho khỏe hihi, dạo này tui toàn thức tới 1h\", \"Ra quán cà phê ngồi chill nè, bạn hay sạc pin kiểu nào?\".",
                 "KHÔNG đáp kiểu \"Dạ vâng ạ\", \"Hihi\", \"Chuẩn luôn\" vì như vậy là không trả lời câu hỏi. Mỗi gợi ý là một câu trả lời khác nhau."
               ]
             : [
-                "Người bình luận chỉ chia sẻ / đồng tình, không hỏi gì: chủ bài đáp RẤT NGẮN, 1-4 chữ, kiểu đáp lời, đồng ý, cười, dạ vâng, cảm ơn. Không kể chuyện của mình, không giảng giải, không lặp lại ý người ta.",
-                "Ví dụ đúng giọng: \"Dạ vâng ạ\", \"Ok nhé\", \"Hihi\", \"Hehe\", \"Được thui\", \"Chuẩn luôn\", \"Đúng rồi á\", \"Cảm ơn nha\", \"Dạ đúng ạ\", \"Chuẩn bài\", \"Haha thật\", \"Nhất trí\". Mỗi gợi ý một kiểu khác nhau, có câu chỉ là tiếng cười."
+                "Người bình luận chia sẻ / đồng tình, không hỏi gì. Chủ bài đáp 4-18 chữ, mỗi gợi ý theo MỘT cách khác nhau:",
+                "  a) bắt đúng một chi tiết trong bình luận của họ rồi hỏi tiếp một câu cụ thể, dễ trả lời (về trải nghiệm của họ);",
+                "  b) kể thêm một chi tiết nhỏ, thật của mình liên quan tới bài (điều bài chưa nói) để họ muốn kể lại;",
+                "  c) đùa nhẹ, hùa theo ý họ, kéo dài câu chuyện;",
+                "  d) nói thật một góc khác hoặc hơi ngược lại cho vui, để họ muốn đáp.",
+                "Không lặp lại hay tóm tắt ý người ta, không giảng giải, không cảm ơn suông. Bình luận chỉ là emoji hoặc 1-2 chữ thì đáp vui ngắn kèm một câu hỏi dễ.",
+                "Bình luận buồn, đang kể khó khăn thì đồng cảm trước, hỏi han nhẹ, không đùa. Bình luận khiêu khích thì đáp bình tĩnh, ngắn, không cãi.",
+                "Ví dụ, bài: \"Trưa nay tự nhủ ăn nhẹ, cuối cùng ôm hộp bánh tráng trộn\", bình luận: \"tui cũng vậy, toàn hứa rồi bỏ\"",
+                "Câu dở: \"Hihi\" / \"Chuẩn luôn\" / \"Cảm ơn bạn nha\" / \"Đúng rồi, ai cũng vậy\"",
+                "Câu tốt: \"Bạn hay gục ở món gì, trà sữa hay bánh tráng?\" / \"Tui hứa từ thứ 2, giờ là thứ 2 tuần thứ 4 rồi 🤣\" / \"Vậy là có đồng minh rồi, mai mình cùng ăn nhẹ thử không?\""
               ]),
           "Bài gốc của người dùng:",
           "<<<",
@@ -1143,6 +1168,7 @@ async function callClaude(payload, settings) {
 
   const res = await fetch(API_URL, {
     method: "POST",
+    signal: settings.signal,
     headers: {
       "content-type": "application/json",
       "x-api-key": settings.apiKey,
@@ -1189,6 +1215,7 @@ async function callGemini(payload, settings) {
     if (i > 0) await new Promise((r) => setTimeout(r, 1200 * i));
     res = await fetch(`${GEMINI_URL}/${encodeURIComponent(attempts[i])}:generateContent`, {
       method: "POST",
+      signal: settings.signal,
       headers: { "content-type": "application/json", "x-goog-api-key": settings.geminiKey },
       body
     });
@@ -1329,6 +1356,7 @@ async function callGroq(payload, settings) {
   for (let i = 0; i < 3; i++) {
     res = await fetch(GROQ_URL, {
       method: "POST",
+      signal: settings.signal,
       headers: { "content-type": "application/json", authorization: `Bearer ${settings.groqKey}` },
       body: JSON.stringify(req)
     });
@@ -1983,6 +2011,30 @@ function seesImages(id, settings) {
   return true;
 }
 
+// Mỗi AI trên mạng được tối đa 60 giây (kể cả các lần tự thử lại bên trong); quá thì bỏ, chuyển sang bên sau.
+// Ollama trên máy không giới hạn ở đây (chạy bằng CPU vốn chậm, lại là dự phòng cuối cùng).
+const PROVIDER_TIMEOUT_MS = 60e3;
+async function withProviderTimeout(id, settings, fn) {
+  if (id === "ollama") return fn(settings);
+  const parent = settings.signal;
+  const c = new AbortController();
+  const stop = () => c.abort();
+  if (parent) parent.aborted ? c.abort() : parent.addEventListener("abort", stop, { once: true });
+  let t;
+  const timer = new Promise((_, rej) => {
+    t = setTimeout(() => {
+      rej(new Error(`quá ${PROVIDER_TIMEOUT_MS / 1000} giây không trả lời`)); // báo lỗi trước rồi mới huỷ yêu cầu
+      c.abort();
+    }, PROVIDER_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([fn({ ...settings, signal: c.signal }), timer]);
+  } finally {
+    clearTimeout(t);
+    if (parent) parent.removeEventListener("abort", stop);
+  }
+}
+
 async function runProvider(id, msg, settings) {
   const p = PROVIDER_INFO[id];
   const imgs = seesImages(id, settings) ? await loadImages(msg.images) : [];
@@ -2156,7 +2208,7 @@ function buildFbxPrompt(msg, pastPosts, guide) {
 }
 
 function fbxOrder(settings) {
-  const clouds = ["groq", "gemini", "openai", "claude"].filter((x) => PROVIDER_INFO[x].key(settings));
+  const clouds = ["groq", "openai", "gemini", "claude"].filter((x) => PROVIDER_INFO[x].key(settings));
   const main = settings.provider === "hybrid" ? settings.hybridCloud || "groq" : settings.provider;
   const order = PROVIDER_INFO[main] && main !== "ollama" && PROVIDER_INFO[main].key(settings) ? [main] : [];
   order.push(...clouds.filter((x) => !order.includes(x)));
@@ -2190,7 +2242,7 @@ async function makeFbx(msg, tabId) {
       }
       progress(`${errors.length ? `${errors[errors.length - 1]} → ` : ""}Đang nhờ ${nm}${id === "ollama" ? " trên máy (khoảng 30-60 giây)" : ""} phân tích và viết`);
       try {
-        const r = await PROVIDER_INFO[id].call({ mode: "raw", system, user, maxTokens: 2000, schema: FBX_SCHEMA }, settings);
+        const r = await withProviderTimeout(id, settings, (s) => PROVIDER_INFO[id].call({ mode: "raw", system, user, maxTokens: 2000, schema: FBX_SCHEMA }, s));
         if (ctrl.signal.aborted) return { cancelled: true };
         const j = parseJsonLoose(r.raw);
         const posts = (j.posts || [])
@@ -2272,8 +2324,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         msg.extraHint = [
           msg.extraHint,
           questionOf(msg.text)
-            ? "Người ta đang hỏi: trả lời thật câu hỏi, 3-12 chữ, giọng nói chuyện thân mật"
-            : "Đáp kiểu chủ bài: 1-4 chữ, dạ vâng / ok / hihi / được thui, không câu dài"
+            ? "Người ta đang hỏi: trả lời thật câu hỏi, 4-18 chữ, giọng nói chuyện thân mật, phần lớn câu hỏi lại họ một câu ngắn cụ thể"
+            : "Đáp kiểu chủ bài muốn nói chuyện tiếp: 4-18 chữ, bắt một chi tiết họ nói rồi hỏi tiếp, hoặc kể thêm chút chuyện của mình, hoặc đùa hùa theo. Không đáp cho có kiểu dạ vâng / hihi / chuẩn luôn"
         ].filter(Boolean).join(". ");
       } else if (msg.quick && !isPost) {
         settings.emojiTail = "auto"; // xin AI chọn emoji cho từng câu (dải gợi ý nhanh luôn có emoji)
@@ -2300,24 +2352,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       let route = "";
       if (settings.provider === "hybrid") {
         const cloud = settings.hybridCloud || "groq";
-        const hasCloudKey = !!PROVIDER_INFO[cloud].key(settings);
+        // Các bên trên mạng đã có key, thử lần lượt: bên chọn cho Kết hợp trước, rồi Groq → ChatGPT → Gemini → Claude.
+        const clouds = [cloud, ...["groq", "openai", "gemini", "claude"].filter((x) => x !== cloud)].filter((x) => PROVIDER_INFO[x].key(settings));
         const similar = settings.learn && !isPost ? countSimilar(history || [], msg.text) : 0;
         const ownLearned = (history || []).filter((h) => h.onMyPost).length;
-        if (!hasCloudKey) {
+        if (!clouds.length) {
           order = ["ollama"];
-          route = `chưa có ${PROVIDER_INFO[cloud].name} key nên dùng máy`;
+          route = `chưa có key AI trên mạng nên dùng máy`;
         } else if (isPost && msg.fbStyle && isTuned(settings)) {
-          order = ["ollama", cloud];
+          order = ["ollama", ...clouds];
           route = "phong cách page Facebook: dùng model riêng đã học từ page";
         } else if (msg.onMyPost && isTuned(settings) && ownLearned < OWN_TRAINED_MIN) {
           // Model riêng chưa được dạy kiểu "đáp bình luận dưới bài của mình": để bên trên mạng viết.
-          order = [cloud, "ollama"];
+          order = [...clouds, "ollama"];
           route = `bình luận dưới bài của bạn (mới có ${ownLearned} câu mẫu, chưa đủ để model riêng học)`;
         } else if (similar >= FAMILIAR_MIN) {
-          order = ["ollama", cloud];
+          order = ["ollama", ...clouds];
           route = `bài quen, có ${similar} bài giống`;
         } else {
-          order = [cloud, "ollama"];
+          order = [...clouds, "ollama"];
           route = similar ? `bài lạ, mới có ${similar} bài giống` : "bài lạ, chưa có bài giống";
         }
       } else {
@@ -2331,7 +2384,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         // Bên chính lỗi (hết lượt, quá tải...) thì tự thử các bên trên mạng khác đã có key.
-        order = [id, ...["groq", "gemini", "openai", "claude"].filter((x) => x !== id && PROVIDER_INFO[x].key(settings))];
+        order = [id, ...["groq", "openai", "gemini", "claude"].filter((x) => x !== id && PROVIDER_INFO[x].key(settings))];
         // Model riêng chưa học kiểu "đáp bình luận dưới bài của mình": có key bên trên mạng thì để bên đó viết trước.
         if (id === "ollama" && msg.onMyPost && isTuned(settings) && order.length > 1 &&
             (history || []).filter((h) => h.onMyPost).length < OWN_TRAINED_MIN) order = [...order.slice(1), "ollama"];
@@ -2354,7 +2407,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const prev = errors.length ? `${errors[errors.length - 1].split(",")[0]} → hỏi ` : "Đang hỏi ";
         progress(order[i] === "ollama" ? `${prev}${nm} trên máy (khoảng 20 giây)` : `${prev}${nm}`);
         try {
-          const r = await runProvider(order[i], msg, settings);
+          const r = await withProviderTimeout(order[i], settings, (s) => runProvider(order[i], msg, s));
           let out;
           if (isPost) {
             const c = cleanPosts(r.suggestions, r.images, msg.extraHint);

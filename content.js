@@ -696,7 +696,29 @@
     regenBtn.textContent = post ? "Tạo bài" : "Tạo lại";
     hintInput.placeholder = post ? "Thêm ý (vd: hài hơn, có 1 câu hỏi, viết tiếng Anh)..." : "Thêm ý (vd: hỏi về giá, giọng hài hơn)...";
     footEl.firstChild.textContent = post ? "Bạn tự đọc lại và tự bấm Đăng trên X. · " : "Bạn tự đọc lại, tự bấm Trả lời và Thích trên X. · ";
+    placePanel();
   }
+
+  // Bảng Gợi ý bình luận nằm đè lên cột bên phải của X (Relevant people, What's happening...), ngay dưới ô tìm kiếm:
+  // không che bài và ô trả lời ở giữa, dễ theo dõi. Cửa sổ hẹp (X ẩn cột phải) hoặc bảng Gợi ý bài đăng thì giữ chỗ cũ.
+  function placePanel() {
+    const st = panel.style;
+    const side = panel.classList.contains("post") ? null : document.querySelector('[data-testid="sidebarColumn"]');
+    const r = side && side.getBoundingClientRect();
+    if (!r || r.width < 280 || r.left < 0 || r.left + 280 > innerWidth) {
+      st.left = st.right = st.top = st.width = st.maxHeight = st.transform = "";
+      return;
+    }
+    const sr = side.querySelector('form[role="search"]')?.getBoundingClientRect();
+    const top = sr && sr.bottom > 0 && sr.bottom < 160 ? sr.bottom + 10 : 60;
+    st.left = `${Math.round(r.left)}px`;
+    st.right = "auto";
+    st.top = `${Math.round(top)}px`;
+    st.transform = "none";
+    st.width = `${Math.round(Math.min(Math.max(r.width, 320), 420, innerWidth - r.left - 12))}px`;
+    st.maxHeight = `${Math.round(innerHeight - top - 12)}px`;
+  }
+  window.addEventListener("resize", () => panel.classList.contains("open") && placePanel());
 
   function openPanel(article) {
     setMode(false);
@@ -705,6 +727,7 @@
     preview.textContent = (info.author ? info.author + "\n" : "") + (info.text || "(bài không có chữ)");
     hintInput.value = "";
     panel.classList.add("open");
+    placePanel();
     loadSuggestions(article);
   }
 

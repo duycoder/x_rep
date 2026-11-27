@@ -583,7 +583,7 @@ const estTokens = (s) => Math.ceil(String(s || "").length / 3.5);
 async function providerOrder(task, settings, config) {
   const pref = config.routing?.[task] || "auto";
   const usable = (id) => PROVIDER_INFO[id] && PROVIDER_INFO[id].key(settings) && (id !== "ollama" || (settings.ollamaModelList || []).length || settings.provider === "ollama");
-  const auto = ["groq", "gemini", "openai", "claude", "ollama"];
+  const auto = ["groq", "openai", "gemini", "claude", "ollama"];
   const order = pref !== "auto" ? [pref, ...auto.filter((x) => x !== pref)] : auto;
   return order.filter(usable);
 }

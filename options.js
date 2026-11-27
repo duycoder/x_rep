@@ -16,6 +16,7 @@ const DEFAULTS = {
   count: 4,
   persona: "",
   styleSamples: "",
+  fbxGuide: self.XCSFbxGuide,
   emojiTail: "off",
   emojiFixed: "😂",
   emojiRepeat: 3,
@@ -237,6 +238,10 @@ async function loadGroqModels() {
   }
 }
 document.getElementById("provider").addEventListener("change", showProvider);
+// Phong cách tài khoản X: điền lại bản mặc định (bấm Lưu mới ghi).
+document.getElementById("fbxGuideReset").addEventListener("click", () => {
+  document.getElementById("fbxGuide").value = self.XCSFbxGuide;
+});
 
 document.getElementById("save").addEventListener("click", () => {
   const data = { postPool: {} };

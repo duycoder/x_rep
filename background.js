@@ -1,6 +1,6 @@
 // Service worker: gọi AI (Gemini hoặc Claude) để tạo gợi ý bình luận.
 // Không tự đăng, không tự thích. Chỉ trả về chữ cho người dùng chọn.
-importScripts("templates.js", "studio-core.js"); // studio-core: Content Studio (ngữ cảnh → chủ đề → bài → ảnh)
+importScripts("templates.js", "studio-core.js", "fbxguide.js"); // studio-core: Content Studio (ngữ cảnh → chủ đề → bài → ảnh)
 
 const API_URL = "https://api.anthropic.com/v1/messages";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -29,6 +29,7 @@ const DEFAULTS = {
   count: 4,
   persona: "",
   styleSamples: "",
+  fbxGuide: self.XCSFbxGuide, // phong cách tài khoản X cho "Tạo bài viết cho X" (fbxguide.js)
   emojiTail: "off", // off | auto | fixed
   emojiFixed: "😂",
   emojiRepeat: 3,
@@ -2012,9 +2013,9 @@ function countSimilar(history, postText) {
 // Cùng giọng, cùng hướng ý với bài gốc nhưng viết lại bằng chữ mới, ngắn gọn cho X, có emoji.
 const FBX_GOALS = {
   impress: { label: "Thêm nhiều lượt hiển thị", emoji: "🔥", rule: "Câu mở đầu thật mạnh, chạm đúng điều rất nhiều người đang nghĩ mà chưa nói ra. Câu ngắn, nhịp nhanh, đọc lướt 2 giây là hiểu." },
-  talk: { label: "Bắt đầu cuộc trò chuyện", emoji: "💬", rule: "Kết bằng MỘT câu hỏi mở thật, dễ trả lời, ai cũng có trải nghiệm riêng để kể. Không hỏi chung chung kiểu 'bạn nghĩ sao?'." },
-  think: { label: "Khiến người ta suy nghĩ", emoji: "🤔", rule: "Lật lại một điều quen thuộc, nói ra một sự thật giản dị mà sâu. Câu cuối để lại khoảng lặng cho người đọc tự ngẫm." },
-  share: { label: "Khiến người ta đăng lại", emoji: "🔁", rule: "Viết thành câu 'đáng trích dẫn' mà người đọc muốn đăng lại để nói thay lòng mình: đúng với số đông, ấm áp hoặc tỉnh táo, không gây tranh cãi." },
+  talk: { label: "Bắt đầu cuộc trò chuyện", emoji: "💬", rule: "Kể một tình huống đời thường rất cụ thể, hơi tự trào, rồi kết bằng MỘT câu hỏi mở thật, dễ trả lời, ai cũng có trải nghiệm riêng để kể (vd 'Có ai cũng hay... không?'). Không hỏi chung chung kiểu 'bạn nghĩ sao?'." },
+  think: { label: "Khiến người ta suy nghĩ", emoji: "🤔", rule: "Lật lại một điều quen thuộc, nói ra một sự thật giản dị mà sâu, từ góc nhìn của chính tôi. Câu cuối là câu hỏi để người đọc tự soi lại mình (vd 'Bạn đang kẹt trong vùng an toàn nào nhất lúc này?')." },
+  share: { label: "Khiến người ta đăng lại", emoji: "🔁", rule: "Có một câu 'đáng trích dẫn' mà người đọc muốn đăng lại để nói thay lòng mình: đúng với số đông, ấm áp hoặc tỉnh táo, không gây tranh cãi. Vẫn có góc nhìn riêng, không phải câu danh ngôn chung chung; được thêm câu hỏi ngắn ở cuối nếu không làm yếu câu trích dẫn." },
   stop: { label: "Không thể bỏ qua", emoji: "⚡", rule: "Câu đầu gây bất ngờ hoặc nói thẳng một điều hơi trái tai nhưng đúng. Dùng tương phản (không phải A, mà là B) hoặc một hình ảnh đời thường rất cụ thể." }
 };
 const FBX_SCHEMA = {
@@ -2027,7 +2028,11 @@ const FBX_SCHEMA = {
     },
     posts: {
       type: "array",
-      items: { type: "object", properties: { goal: { type: "string" }, text: { type: "string" }, why: { type: "string" } }, required: ["goal", "text", "why"] },
+      items: {
+        type: "object",
+        properties: { goal: { type: "string" }, text: { type: "string" }, why: { type: "string" }, image: { type: "string" } },
+        required: ["goal", "text", "why", "image"]
+      },
       minItems: 1
     }
   },
@@ -2051,29 +2056,85 @@ function copyRatio(a, src) {
   return n / g.size;
 }
 
-function buildFbxPrompt(msg, pastPosts) {
+// Khán giả nhắm tới (chọn trong bảng "Tạo bài viết cho X"): ngôn ngữ + cách viết hợp văn hoá nơi đó.
+const FBX_AUDIENCES = {
+  vn: { label: "Việt Nam", lang: "tiếng Việt", rule: "" },
+  global: {
+    label: "Quốc tế",
+    lang: "tiếng Anh",
+    rule: "Người đọc ở nhiều nước, tiếng Anh có thể không phải tiếng mẹ đẻ: câu ngắn, từ phổ thông, không tiếng lóng hay chuyện chỉ một nước mới hiểu."
+  },
+  us: {
+    label: "Mỹ",
+    lang: "tiếng Anh kiểu Mỹ",
+    rule: "Chính tả và cách nói Mỹ (color, mom, apartment), giọng thẳng, tự tin, gần gũi; ví dụ đời sống quen với người Mỹ."
+  },
+  uk: {
+    label: "Anh / Úc",
+    lang: "tiếng Anh kiểu Anh",
+    rule: "Chính tả Anh (colour, mum, flat), giọng tiết chế, hơi hài hước khô, tránh khoa trương kiểu quảng cáo."
+  },
+  in: {
+    label: "Ấn Độ",
+    lang: "tiếng Anh",
+    rule: "Người đọc Ấn Độ: ấm áp, coi trọng gia đình, học hành, sự nghiệp và nỗ lực; tiếng Anh rõ ràng, không dùng từ lóng phương Tây khó hiểu."
+  },
+  sea: {
+    label: "Đông Nam Á",
+    lang: "tiếng Anh",
+    rule: "Người đọc Philippines, Malaysia, Singapore, Indonesia, Thái Lan: tiếng Anh đơn giản, thân thiện; gia đình, công việc, cuộc sống thành phố châu Á."
+  }
+};
+
+function buildFbxPrompt(msg, pastPosts, guide) {
   const goals = (msg.goals || []).filter((g) => FBX_GOALS[g]);
   if (!goals.length) goals.push("think");
+  const aud = FBX_AUDIENCES[msg.audience] || FBX_AUDIENCES.vn;
+  const foreign = aud !== FBX_AUDIENCES.vn;
   const per = msg.only ? 1 : goals.length === 1 ? 3 : goals.length === 2 ? 2 : 1;
   const mine = (pastPosts || []).slice(-4).map((p) => `- ${String(p.text).replace(/\s+/g, " ").slice(0, 280)}`);
+  guide = String(guide || "").trim().slice(0, 4000);
   const system = [
-    "Bạn là người viết nội dung cho X (Twitter) rất giỏi, viết tiếng Việt tự nhiên như người thật.",
-    "Bạn nhận một bài Facebook hay. Việc của bạn: viết bài MỚI cho X, giữ đúng giọng và đúng hướng ý của bài gốc, nhưng bằng câu chữ của riêng mình.",
+    `Bạn là người viết nội dung cho X (Twitter) rất giỏi, viết ${aud.lang} tự nhiên như người bản xứ.`,
+    guide
+      ? "Bạn nhận một bài Facebook hay. Việc của bạn: viết bài MỚI cho X, giữ đúng hướng ý của bài gốc nhưng nói bằng GIỌNG TÀI KHOẢN CỦA TÔI (mục PHONG CÁCH bên dưới) và bằng câu chữ của riêng mình."
+      : "Bạn nhận một bài Facebook hay. Việc của bạn: viết bài MỚI cho X, giữ đúng giọng và đúng hướng ý của bài gốc, nhưng bằng câu chữ của riêng mình.",
+    guide
+      ? [
+          "\nPHONG CÁCH TÀI KHOẢN CỦA TÔI (giọng bài gốc khác thì theo phong cách này):",
+          guide,
+          foreign ? `(Khán giả không phải người Việt: giữ tinh thần phong cách trên, viết bằng ${aud.lang}, không dịch bài mẫu.)` : ""
+        ].filter(Boolean).join("\n")
+      : "",
+    foreign
+      ? [
+          "",
+          `KHÁN GIẢ: ${aud.label}. Bài cho X viết bằng ${aud.lang}. KHÔNG dịch từng chữ bài gốc: lấy ý chính rồi nói lại như một người ở đó tự nghĩ ra.`,
+          aud.rule,
+          "Bỏ hoặc đổi những chi tiết chỉ người Việt mới hiểu (thành ngữ, địa danh, tiền đồng, phong tục) sang thứ người đọc ở đó quen.",
+          "Trường analysis, why và image vẫn viết bằng tiếng Việt (để tôi đọc); chỉ trường text viết bằng ngôn ngữ của khán giả."
+        ].join("\n")
+      : "",
     "",
     "BƯỚC 1, phân tích bài gốc: ý chính là gì, giọng ra sao (ấm áp, tỉnh táo, thẳng thắn, hài hước...), viết cho ai, điều gì khiến bài gốc hay.",
-    "BƯỚC 2, viết bài cho X theo mục tiêu được giao.",
+    "BƯỚC 2, tìm góc gần gũi: ý đó chạm vào chuyện đời thường nào của tôi (tiền bạc, tâm lý, tuổi 20-30, so sánh, vùng an toàn, ăn uống...).",
+    "BƯỚC 3, viết bài cho X theo mục tiêu được giao, theo công thức: câu mở đầu mạnh → thân bài gần gũi, cụ thể → câu hỏi mở ở cuối.",
     "",
     "QUY TẮC:",
     "1. KHÔNG chép: không được trùng quá 4 chữ liền với bài gốc. Cùng ý, khác lời.",
-    "2. Đơn giản, dễ hiểu ngay, nhưng KHÔNG nông cạn: phải có một ý đáng giá, đúng và có ích với hầu hết mọi người.",
-    "3. Ngắn: tối đa 240 ký tự. 1-4 câu, có thể xuống dòng giữa các câu cho dễ đọc.",
-    "4. Có emoji: 1-3 emoji đặt đúng chỗ, hợp cảm xúc của câu (không rải emoji vô nghĩa, không đặt emoji giữa từ).",
-    "5. Không hashtag (tối đa 1 nếu thật cần), không link, không gắn tên ai, không nhắc tới Facebook hay bài gốc.",
-    "6. Không bịa tin tức, số liệu, lời khuyên y khoa; không chính trị, không công kích ai.",
-    "7. Mỗi bài một cách mở đầu khác nhau.",
+    "2. Câu mở đầu (1-2 dòng đầu) phải giữ chân người đọc: thật lòng, hài hước hoặc gây tò mò. CẤM mở đầu kiểu 'Hôm nay mình muốn chia sẻ...', 'Bạn có biết...', 'Cuộc sống là...'.",
+    "3. Thật lòng và cụ thể: kể từ góc nhìn của tôi, bằng một tình huống đời thường có thật. Không viết câu trích dẫn động lực chung chung, không giảng đạo lý.",
+    "4. Đơn giản, dễ hiểu ngay, nhưng KHÔNG nông cạn: phải có một ý đáng giá, đúng và có ích với hầu hết mọi người. Hài hước nhẹ khi hợp.",
+    "5. Kết bằng MỘT câu hỏi mở, dễ trả lời, mời người đọc kể chuyện của chính họ (trừ khi mục tiêu cho phép khác).",
+    "6. Ngắn, đọc tốt trên điện thoại: tối đa 260 ký tự, 2-4 câu, mỗi câu một dòng.",
+    "7. Emoji tự nhiên: 1-2 emoji đặt đúng chỗ, hợp cảm xúc của câu (không rải emoji vô nghĩa, không đặt emoji giữa từ).",
+    "8. Không hashtag, không link, không gắn tên ai, không nhắc tới Facebook hay bài gốc.",
+    "9. Không bịa tin tức, số liệu, lời khuyên y khoa; không chính trị, không công kích ai.",
+    "10. Mỗi bài một cách mở đầu khác nhau.",
     "",
-    'Chỉ trả về JSON đúng dạng: {"analysis":{"main_idea":"...","tone":"...","audience":"...","hook":"..."},"posts":[{"goal":"<mã mục tiêu>","text":"<bài cho X>","why":"<1 câu: vì sao bài này đạt mục tiêu>"}]}',
-    "Các trường trong analysis viết ngắn (dưới 20 chữ mỗi trường)."
+    'Chỉ trả về JSON đúng dạng: {"analysis":{"main_idea":"...","tone":"...","audience":"...","hook":"..."},"posts":[{"goal":"<mã mục tiêu>","text":"<bài cho X>","why":"<1 câu: vì sao bài này đạt mục tiêu>","image":"<gợi ý 1 ảnh>"}]}',
+    "Các trường trong analysis viết ngắn (dưới 20 chữ mỗi trường).",
+    "Trường image: gợi ý MỘT ảnh rõ, sạch, hợp bài (ảnh tự chụp đời thường, món ăn, cảnh vật...), viết tiếng Việt dưới 15 chữ."
   ].join("\n");
   const user = [
     msg.page ? `Page đăng bài gốc: ${msg.page}` : "",
@@ -2082,7 +2143,12 @@ function buildFbxPrompt(msg, pastPosts) {
     "",
     "MỤC TIÊU (viết đúng số bài cho mỗi mục tiêu, trường goal ghi đúng mã):",
     ...goals.map((g) => `- ${g} (${FBX_GOALS[g].label}): ${per} bài. ${FBX_GOALS[g].rule}`),
-    mine.length ? ["", "Vài bài X tôi từng đăng (học giọng của tôi, không chép):", ...mine].join("\n") : "",
+    foreign
+      ? `\nKHÁN GIẢ: ${aud.label}. CHỈ trường text viết bằng ${aud.lang}. Các trường analysis (main_idea, tone, audience, hook), why và image BẮT BUỘC viết bằng tiếng Việt.`
+      : "",
+    mine.length
+      ? ["", `Vài bài X tôi từng đăng (học giọng của tôi, không chép${foreign ? `; bài mới vẫn viết bằng ${aud.lang}` : ""}):`, ...mine].join("\n")
+      : "",
     msg.hint ? `\nGhi chú thêm của tôi: ${String(msg.hint).slice(0, 300)}` : "",
     msg.avoid?.length ? `\nĐã có các bài dưới đây, viết KHÁC hẳn (khác mở đầu, khác cách nói):\n${msg.avoid.map((x) => `- ${String(x).slice(0, 280)}`).join("\n")}` : ""
   ].filter(Boolean).join("\n");
@@ -2110,7 +2176,7 @@ async function makeFbx(msg, tabId) {
     const settings = await getSettings();
     settings.signal = ctrl.signal;
     const { postHistory = [] } = await chrome.storage.local.get({ postHistory: [] });
-    const { system, user, goals } = buildFbxPrompt(msg, postHistory);
+    const { system, user, goals } = buildFbxPrompt(msg, postHistory, settings.fbxGuide);
     const order = fbxOrder(settings);
     if (!order.length) return { error: "Chưa có AI nào dùng được. Vào Cài đặt → 🤖 AI để thêm key (Groq miễn phí) hoặc bật Ollama." };
     const errors = [];
@@ -2124,7 +2190,7 @@ async function makeFbx(msg, tabId) {
       }
       progress(`${errors.length ? `${errors[errors.length - 1]} → ` : ""}Đang nhờ ${nm}${id === "ollama" ? " trên máy (khoảng 30-60 giây)" : ""} phân tích và viết`);
       try {
-        const r = await PROVIDER_INFO[id].call({ mode: "raw", system, user, maxTokens: 1500, schema: FBX_SCHEMA }, settings);
+        const r = await PROVIDER_INFO[id].call({ mode: "raw", system, user, maxTokens: 2000, schema: FBX_SCHEMA }, settings);
         if (ctrl.signal.aborted) return { cancelled: true };
         const j = parseJsonLoose(r.raw);
         const posts = (j.posts || [])
@@ -2132,7 +2198,7 @@ async function makeFbx(msg, tabId) {
             let text = String(p.text || "").replace(/^["“”']+|["“”']+$/g, "").replace(/\n{3,}/g, "\n\n").trim();
             const goal = FBX_GOALS[p.goal] ? p.goal : msg.only || goals[0];
             if (text && !EMOJI_RE.test(text)) text += ` ${FBX_GOALS[goal].emoji}`;
-            return { goal, text, why: String(p.why || "").trim(), len: xLen(text), copied: copyRatio(text, msg.text) > 0.35 };
+            return { goal, text, why: String(p.why || "").trim(), image: String(p.image || "").trim().slice(0, 120), len: xLen(text), copied: copyRatio(text, msg.text) > 0.35 };
           })
           .filter((p) => p.text.length >= 15);
         if (!posts.length) throw new Error("AI trả về bài rỗng");
@@ -2157,6 +2223,7 @@ async function saveFbxPick(msg) {
     url: String(msg.url || ""),
     source: String(msg.source || "").slice(0, 5000),
     goal: String(msg.goal || ""),
+    audience: FBX_AUDIENCES[msg.audience] ? msg.audience : "vn",
     suggested: String(msg.suggested || "").slice(0, 1000),
     text: String(msg.text || "").slice(0, 1000),
     action: msg.action === "post" ? "post" : "copy"

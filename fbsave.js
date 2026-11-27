@@ -276,6 +276,9 @@
     .fx .goal.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 10%, var(--bg)); }
     .fx .goal.on .t::after { content: " ✓"; color: var(--acc); }
     .fx input.hint { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
+    .fx .auds { display: flex; flex-wrap: wrap; gap: 6px; }
+    .fx .aud { border-radius: 999px; padding: 5px 11px; font-weight: 500; font-size: 13px; }
+    .fx .aud.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 10%, var(--bg)); color: var(--acc); }
     .fx .note { font-size: 12px; color: var(--mut); }
     .fx .err { color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, var(--bg)); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
     /* đang xử lý */
@@ -302,6 +305,9 @@
     .fx .meta .cnt.over { color: var(--bad); font-weight: 700; }
     .fx .why { font-size: 12px; color: var(--mut); font-style: italic; }
     .fx .warn { font-size: 12px; color: #b26b00; }
+    .fx .img { font-size: 12px; color: var(--mut); }
+    .fx .tips { font-size: 12px; color: #b26b00; }
+    .fx .tips:empty { display: none; }
     .fx .acts { display: flex; gap: 6px; flex-wrap: wrap; }
     .fx .acts button { padding: 5px 10px; font-size: 12px; }
     .fx .ok { color: var(--ok); }
@@ -464,6 +470,18 @@
     ["stop", "⚡", "Không thể bỏ qua", "Câu đầu bất ngờ, nói thẳng điều đúng"]
   ];
   const GOAL = Object.fromEntries(GOALS.map((g) => [g[0], g]));
+  // Khán giả nhắm tới: Việt Nam viết tiếng Việt; các khu vực khác viết tiếng Anh theo văn hoá nơi đó.
+  const AUDS = [
+    // Windows không hiện cờ emoji (chỉ ra chữ "VN", "US"): dùng hình khác
+    ["vn", "🏠", "Việt Nam"],
+    ["global", "🌏", "Quốc tế"],
+    ["us", "🗽", "Mỹ"],
+    ["uk", "💂", "Anh / Úc"],
+    ["in", "🪷", "Ấn Độ"],
+    ["sea", "🌴", "Đông Nam Á"]
+  ];
+  const AUD = Object.fromEntries(AUDS.map((a) => [a[0], a]));
+  const audNote = (k) => (k === "vn" ? "Viết tiếng Việt." : "Viết tiếng Anh theo cách nói và văn hoá nơi đó, không dịch từng chữ.");
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const xLen = (t) => [...String(t)].reduce((n, c) => n + (/\p{Extended_Pictographic}/u.test(c) ? 2 : 1), 0);
 
@@ -474,10 +492,11 @@
   layer.appendChild(fx);
   const fxBody = fx.querySelector(".bd");
   const fxFoot = fx.querySelector(".ft");
-  const S = { post: null, text: "", page: "", url: "", goals: ["think"], hint: "", reqId: 0, res: null, timer: null, busy: false };
+  const S = { post: null, text: "", page: "", url: "", goals: ["think"], audience: "vn", hint: "", reqId: 0, res: null, timer: null, busy: false };
   try {
-    chrome.storage.local.get({ fbxGoals: ["think"] }, (s) => {
+    chrome.storage.local.get({ fbxGoals: ["think"], fbxAudience: "vn" }, (s) => {
       if (Array.isArray(s.fbxGoals) && s.fbxGoals.length) S.goals = s.fbxGoals.filter((g) => GOAL[g]);
+      if (AUD[s.fbxAudience]) S.audience = s.fbxAudience;
     });
   } catch (_) {
     // extension vừa tải lại
@@ -523,6 +542,9 @@
       <div class="goals">${GOALS.map(([k, e, t, d]) => `<button class="goal${S.goals.includes(k) ? " on" : ""}" data-goal="${k}">
         <span class="e">${e}</span><span><span class="t">${t}</span><small>${d}</small></span></button>`).join("")}</div>
       <div class="note">Chọn 1 mục tiêu: 3 bài để chọn. Chọn nhiều: mỗi mục tiêu 1–2 bài.</div>
+      <div class="lbl">Viết cho khán giả ở đâu?</div>
+      <div class="auds">${AUDS.map(([k, e, t]) => `<button class="aud${S.audience === k ? " on" : ""}" data-aud="${k}">${e} ${t}</button>`).join("")}</div>
+      <div class="note aud-note">${audNote(S.audience)}</div>
       <input class="hint" placeholder="Ghi chú thêm (không bắt buộc), vd: viết cho người trẻ mới đi làm" value="${esc(S.hint)}">`;
     fxFoot.innerHTML = `<button class="pri" data-a="go"${S.goals.length ? "" : " disabled"}>⚡ Phân tích & viết</button><span class="grow"></span><button data-a="discard">Bỏ</button>`;
   }
@@ -570,7 +592,7 @@
       if (!chrome.runtime?.id) return resolve({ error: "Extension vừa được tải lại. Bấm F5 trang Facebook." });
       try {
         chrome.runtime.sendMessage(
-          { type: "fbx-make", reqId, text: S.text, page: S.page, goals: S.goals, hint: S.hint, ...extra },
+          { type: "fbx-make", reqId, text: S.text, page: S.page, goals: S.goals, audience: S.audience, hint: S.hint, ...extra },
           (res) => {
             if (reqId !== S.reqId) return resolve(null); // đã huỷ / đã bấm lại
             resolve(chrome.runtime.lastError ? { error: chrome.runtime.lastError.message } : res || { error: "Không có phản hồi" });
@@ -611,6 +633,8 @@
       <textarea rows="3" data-i="${i}">${esc(p.text)}</textarea>
       ${p.copied ? `<div class="warn">⚠ Hơi giống câu chữ bài gốc: sửa thêm hoặc bấm Viết lại</div>` : ""}
       ${p.why ? `<div class="why">${esc(p.why)}</div>` : ""}
+      ${p.image ? `<div class="img">🖼 Ảnh nên dùng: ${esc(p.image)}</div>` : ""}
+      <div class="tips"></div>
       <div class="meta"><span class="cnt"></span><span class="grow"></span><span class="ok" data-el="done"></span></div>
       <div class="acts"><button data-a="copy" data-i="${i}">📋 Chép</button><button class="dark" data-a="post" data-i="${i}">𝕏 Đăng lên X</button>
         <button data-a="sched" data-i="${i}" title="Mở X, điền bài và tự chọn giờ hẹn kế tiếp">⏰ Hẹn giờ</button>
@@ -656,6 +680,20 @@
     c.classList.toggle("over", n > 280);
     card.querySelector('[data-a="post"]').disabled = n > 280 || !ta.value.trim();
     card.querySelector('[data-a="sched"]').disabled = n > 280 || !ta.value.trim();
+    card.querySelector(".tips").textContent = tipsOf(ta.value);
+  }
+
+  // Soát nhanh theo công thức bài chạy tốt: mở đầu mạnh, kết bằng câu hỏi, gọn trên điện thoại.
+  function tipsOf(t) {
+    const lines = String(t).split(/\n/).map((x) => x.trim()).filter(Boolean);
+    if (!lines.length) return "";
+    const out = [];
+    if (!/[?？]/.test(lines[lines.length - 1])) out.push("chưa kết bằng câu hỏi (câu hỏi cuối giúp có nhiều trả lời hơn)");
+    if (/^(hôm nay (mình|tôi|tui) muốn chia sẻ|bạn có biết|cuộc sống là)/i.test(lines[0])) out.push("câu mở đầu yếu, nên đổi");
+    if (xLen(lines[0]) > 140) out.push("dòng đầu hơi dài, nên tách cho dễ đọc");
+    if ((t.match(/#\p{L}/gu) || []).length) out.push("nên bỏ hashtag");
+    if ((t.match(/\p{Extended_Pictographic}/gu) || []).length > 3) out.push("hơi nhiều emoji");
+    return out.length ? `💡 ${out.join(" · ")}` : "";
   }
 
   function textOf(i) {
@@ -666,7 +704,7 @@
   function pick(i, action) {
     const p = S.res.posts[i];
     try {
-      chrome.runtime.sendMessage({ type: "fbx-pick", action, page: S.page, url: S.url, source: S.text, goal: p.goal, suggested: p.text, text: textOf(i) });
+      chrome.runtime.sendMessage({ type: "fbx-pick", action, page: S.page, url: S.url, source: S.text, goal: p.goal, audience: S.audience, suggested: p.text, text: textOf(i) });
     } catch (_) {
       // extension vừa tải lại: bỏ qua phần ghi lại
     }
@@ -749,6 +787,19 @@
     }
   });
   fx.addEventListener("click", async (e) => {
+    const au = e.target.closest("[data-aud]");
+    if (au && AUD[au.dataset.aud]) {
+      S.audience = au.dataset.aud;
+      fx.querySelectorAll("[data-aud]").forEach((x) => x.classList.toggle("on", x === au));
+      const note = fx.querySelector(".aud-note");
+      if (note) note.textContent = audNote(S.audience);
+      try {
+        chrome.storage.local.set({ fbxAudience: S.audience });
+      } catch (_) {
+        // extension vừa tải lại
+      }
+      return;
+    }
     const g = e.target.closest("[data-goal]");
     if (g) {
       const k = g.dataset.goal;
